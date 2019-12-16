@@ -3,8 +3,10 @@ from torch_scatter import scatter_add
 from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.nn.conv.cheb_conv import ChebConv
 from torch_geometric.utils import remove_self_loops
+import torch.nn as nn
 
 from utils import normal
+
 
 class ChebConv_Coma(ChebConv):
     def __init__(self, in_channels, out_channels, K, normalization=None, bias=True):
@@ -14,13 +16,12 @@ class ChebConv_Coma(ChebConv):
         normal(self.weight, 0, 0.1)
         normal(self.bias, 0, 0.1)
 
-
     @staticmethod
     def norm(edge_index, num_nodes, edge_weight=None, dtype=None):
         edge_index, edge_weight = remove_self_loops(edge_index, edge_weight)
 
         if edge_weight is None:
-            edge_weight = torch.ones((edge_index.size(1), ),
+            edge_weight = torch.ones((edge_index.size(1),),
                                      dtype=dtype,
                                      device=edge_index.device)
         row, col = edge_index
@@ -33,7 +34,7 @@ class ChebConv_Coma(ChebConv):
         Tx_0 = x
         out = torch.matmul(Tx_0, self.weight[0])
 
-        x = x.transpose(0,1)
+        x = x.transpose(0, 1)
         Tx_0 = x
         if self.weight.size(0) > 1:
             Tx_1 = self.propagate(edge_index, x=x, norm=norm)
@@ -59,12 +60,28 @@ class Pool(MessagePassing):
     def __init__(self):
         super(Pool, self).__init__(flow='target_to_source')
 
-    def forward(self, x, pool_mat,  dtype=None):
-        x = x.transpose(0,1)
+    def forward(self, x, pool_mat, dtype=None):
+        x = x.transpose(0, 1)
         out = self.propagate(edge_index=pool_mat._indices(), x=x, norm=pool_mat._values(), size=pool_mat.size())
-        return out.transpose(0,1)
+        return out.transpose(0, 1)
 
     def message(self, x_j, norm):
         return norm.view(-1, 1, 1) * x_j
 
 
+# class DenseChebConv(nn.Module):
+#     def __init__(self, in_channels, out_channels, K):
+#
+#
+# class DiffPool(nn.Module):
+#     def __init__(self, in_vertices, out_vertices, channels, K, normalization=None, bias=True):
+#         super(DiffPool, self).__init__()
+#         self.in_vertices = in_vertices
+#         self.out_vertices = out_vertices
+#         self.channels = channels
+#         self.K = K
+#         self.data_conv = ChebConv(channels, channels, K, normalization=normalization, bias=bias)
+#         self.pool_conv = ChebConv(channels, out_vertices, K, normalization=normalization, bias=bias)
+#
+#     def forward(self, x, adj):
+#         z = self.data_conv()

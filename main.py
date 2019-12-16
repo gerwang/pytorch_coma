@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torch_geometric.data import DataLoader
 
 from psbody.mesh import Mesh, MeshViewers
-import mesh_operations
+# import mesh_operations
 from config_parser import read_config
 from data import ComaDataset
 from model import Coma
@@ -76,8 +76,8 @@ def main(args):
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    print('Generating transforms')
-    M, A, D, U = mesh_operations.generate_transform_matrices(template_mesh, config['downsampling_factors'])
+    # print('Generating transforms')
+    # M, A, D, U = mesh_operations.generate_transform_matrices(template_mesh, config['downsampling_factors'])
 
     D_t = [scipy_to_torch_sparse(d).to(device) for d in D]
     U_t = [scipy_to_torch_sparse(u).to(device) for u in U]
