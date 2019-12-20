@@ -69,10 +69,57 @@ class Pool(MessagePassing):
         return norm.view(-1, 1, 1) * x_j
 
 
-# class DenseChebConv(nn.Module):
-#     def __init__(self, in_channels, out_channels, K):
-#
-#
+class DenseChebConv(nn.Module):
+    def __init__(self, in_channels, out_channels, K, bias=True):
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.cheb_order = K
+
+        self.weight = nn.Parameter(torch.Tensor(K, in_channels, out_channels))
+
+        if bias:
+            self.bias = nn.Parameter(torch.Tensor(out_channels))
+        else:
+            self.register_parameter('bias', None)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        normal(self.weight, 0, 0.1)
+        normal(self.bias, 0, 0.1)
+
+    def forward(self, x, adj):
+        """
+        siamese mean aggregation
+        :param x: batch x V x in_C
+        :param adj: V x V, may be sparse, float32!!
+        :return: batch x V x out_C
+        """
+        d_vec = torch.sum(adj, dim=1)
+        # D = torch.diag(d_vec)  # column wise add
+        inv_sqrt_d = d_vec.pow(-1 / 2)
+        inv_sqrt_D = torch.diag(inv_sqrt_d)
+        L = inv_sqrt_D @ -adj @ inv_sqrt_D  # fixme: low efficiency TODO: not real D_sym?
+
+        Tx_0 = x
+        out = torch.matmul(x, self.weight[0])
+
+        if self.weight.size(0) > 1:
+            Tx_1 = L @ Tx_0
+            out += torch.matmul(Tx_1, self.weight[1])
+
+        for i in range(2, self.weight.size(0)):
+            Tx_2 = 2 * L @ Tx_1 - Tx_0
+            out += torch.matmul(Tx_2, self.weight[i])
+            Tx_0, Tx_1 = Tx_1, Tx_2
+
+        if self.bias is not None:
+            out += self.bias
+
+        return out
+
+
 # class DiffPool(nn.Module):
 #     def __init__(self, in_vertices, out_vertices, channels, K, normalization=None, bias=True):
 #         super(DiffPool, self).__init__()
@@ -85,3 +132,5 @@ class Pool(MessagePassing):
 #
 #     def forward(self, x, adj):
 #         z = self.data_conv()
+
+from torch_cluster import graclus_cluster
