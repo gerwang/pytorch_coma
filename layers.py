@@ -4,6 +4,7 @@ from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.nn.conv.cheb_conv import ChebConv
 from torch_geometric.utils import remove_self_loops
 import torch.nn as nn
+from torch_geometric.nn.dense.diff_pool import dense_diff_pool
 
 from utils import normal
 
@@ -120,17 +121,37 @@ class DenseChebConv(nn.Module):
         return out
 
 
-# class DiffPool(nn.Module):
-#     def __init__(self, in_vertices, out_vertices, channels, K, normalization=None, bias=True):
-#         super(DiffPool, self).__init__()
-#         self.in_vertices = in_vertices
-#         self.out_vertices = out_vertices
-#         self.channels = channels
-#         self.K = K
-#         self.data_conv = ChebConv(channels, channels, K, normalization=normalization, bias=bias)
-#         self.pool_conv = ChebConv(channels, out_vertices, K, normalization=normalization, bias=bias)
-#
-#     def forward(self, x, adj):
-#         z = self.data_conv()
+class SparseDiffPool(nn.Module):
+    def __init__(self, in_vertices, out_vertices, channels, K, normalization=None, bias=True):
+        super().__init__()
+        self.in_vertices = in_vertices
+        self.out_vertices = out_vertices
+        self.channels = channels
+        self.K = K
+        self.data_conv = ChebConv_Coma(channels, channels, K, normalization=normalization, bias=bias)
+        self.pool_conv = ChebConv_Coma(channels, out_vertices, K, normalization=normalization, bias=bias)
 
-from torch_cluster import graclus_cluster
+    def forward(self, x, edge_index, norm, dense_adj, edge_weight=None):
+        z = self.data_conv(x, edge_index, norm, edge_weight)
+        x_mean = x.mean(dim=0, keepdim=True)
+        s = self.pool_conv(x_mean, edge_index, norm, edge_weight)[0]
+        out, out_adj, link_loss, ent_loss = dense_diff_pool(z, dense_adj, s)
+        return out, out_adj[0], link_loss, ent_loss
+
+
+class DenseDiffPool(nn.Module):
+    def __init__(self, in_vertices, out_vertices, channels, K, bias=True):
+        super().__init__()
+        self.in_vertices = in_vertices
+        self.out_vertices = out_vertices
+        self.channels = channels
+        self.K = K
+        self.data_conv = DenseChebConv(channels, channels, K, bias=bias)
+        self.pool_conv = DenseChebConv(channels, out_vertices, K, bias=bias)
+
+    def forward(self, x, adj):
+        z = self.data_conv(x, adj)
+        x_mean = x.mean(dim=0, keepdim=True)
+        s = self.pool_conv(x_mean, adj)[0]
+        out, out_adj, link_loss, ent_loss = dense_diff_pool(z, adj, s)
+        return out, out_adj[0], link_loss, ent_loss

@@ -1,6 +1,7 @@
 import os
 import configparser
 
+
 def set_default_parameters(config):
     config.add_section('Input Output')
     config.set('Input Output', 'visualize', 'False')
@@ -47,12 +48,13 @@ def read_config(fname):
     config_parms['checkpoint_file'] = config.get('Model Parameters', 'checkpoint_file')
     config_parms['n_layers'] = config.getint('Model Parameters', 'n_layers')
     config_parms['z'] = config.getint('Model Parameters', 'z')
-    config_parms['downsampling_factors'] =  [int(x) for x in config.get('Model Parameters', 'downsampling_factors').split(',')]
-    config_parms['num_conv_filters'] = [int(x) for x in config.get('Model Parameters', 'num_conv_filters').split(',')]
+    config_parms['downsampling_factors'] = [int(x) for x in
+                                            config.get('Model Parameters', 'downsampling_factors').split(',')]
+    config_parms['enc_filters'] = [int(x) for x in config.get('Model Parameters', 'enc_filters').split(',')]
+    config_parms['dec_filters'] = [int(x) for x in config.get('Model Parameters', 'dec_filters').split(',')]
     config_parms['polygon_order'] = [int(x) for x in config.get('Model Parameters', 'polygon_order').split(',')]
     config_parms['workers_thread'] = config.getint('Model Parameters', 'workers_thread')
     config_parms['optimizer'] = config.get('Model Parameters', 'optimizer')
-
 
     config_parms['batch_size'] = config.getint('Learning Parameters', 'batch_size')
     config_parms['learning_rate'] = config.getfloat('Learning Parameters', 'learning_rate')
@@ -60,6 +62,7 @@ def read_config(fname):
     config_parms['weight_decay'] = config.getfloat('Learning Parameters', 'weight_decay')
     config_parms['epoch'] = config.getint('Learning Parameters', 'epoch')
     return config_parms
+
 
 if __name__ == '__main__':
     pkg_path, _ = os.path.split(os.path.realpath(__file__))
@@ -71,6 +74,3 @@ if __name__ == '__main__':
         set_default_parameters(config)
         config.write(configfile)
         configfile.close()
-
-
-
