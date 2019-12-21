@@ -9,13 +9,16 @@ from psbody.mesh import Mesh
 from utils import get_vert_connectivity
 from transform import Normalize
 
+
 class ComaDataset(InMemoryDataset):
-    def __init__(self, root_dir, dtype='train', split='sliced', split_term='sliced', nVal = 100, transform=None, pre_transform=None):
+    def __init__(self, root_dir, dtype='train', split='sliced', split_term='sliced', nVal=100, transform=None,
+                 pre_transform=None):
         self.root_dir = root_dir
         self.split = split
         self.split_term = split_term
         self.nVal = nVal
         self.transform = transform
+
         self.pre_tranform = pre_transform
         # Downloaded data is present in following format root_dir/*/*/*.py
         self.data_file = glob.glob(self.root_dir + '/*/*/*.ply')
@@ -32,7 +35,12 @@ class ComaDataset(InMemoryDataset):
         norm_path = self.processed_paths[3]
         norm_dict = torch.load(norm_path)
         self.mean, self.std = norm_dict['mean'], norm_dict['std']
-        self.data, self.slices = torch.load(data_path)
+        self.data_path = data_path
+        self.data, self.slices = None, None
+        self.load_data()
+
+    def load_data(self):
+        self.data, self.slices = torch.load(self.data_path)
         if self.transform:
             self.data = [self.transform(td) for td in self.data]
 
@@ -43,7 +51,7 @@ class ComaDataset(InMemoryDataset):
     @property
     def processed_file_names(self):
         processed_files = ['training.pt', 'val.pt', 'test.pt', 'norm.pt']
-        processed_files = [self.split_term+'_'+pf for pf in processed_files]
+        processed_files = [self.split_term + '_' + pf for pf in processed_files]
         return processed_files
 
     def process(self):
@@ -103,6 +111,7 @@ class ComaDataset(InMemoryDataset):
         torch.save(self.collate(test_data), self.processed_paths[2])
         torch.save(norm_dict, self.processed_paths[3])
 
+
 def prepare_sliced_dataset(path):
     ComaDataset(path, pre_transform=Normalize())
 
@@ -112,6 +121,7 @@ def prepare_expression_dataset(path):
                  'mouth_extreme', 'mouth_middle', 'mouth_open', 'mouth_side', 'mouth_up']
     for exp in test_exps:
         ComaDataset(path, split='expression', split_term=exp, pre_transform=Normalize())
+
 
 def prepare_identity_dataset(path):
     test_ids = ['FaceTalk_170725_00137_TA', 'FaceTalk_170731_00024_TA', 'FaceTalk_170811_03274_TA',
@@ -140,4 +150,3 @@ if __name__ == '__main__':
         prepare_identity_dataset(data_dir)
     else:
         raise Exception("Only sliced, expression and identity split are supported")
-

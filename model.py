@@ -3,24 +3,48 @@ import torch.nn.functional as F
 
 from layers import ChebConv_Coma, Pool, DenseChebConv, SparseDiffPool, DenseDiffPool
 
+
 class Coma(torch.nn.Module):
 
-    def __init__(self, dataset, config, downsample_matrices, upsample_matrices, adjacency_matrices, num_nodes):
+    def __init__(self, dataset, config, template_adj, num_nodes):
         super(Coma, self).__init__()
         self.n_layers = config['n_layers']
         self.enc_filters = config['enc_filters']
         self.dec_filters = config['dec_filters']
         self.K = config['polygon_order']
         self.z = config['z']
-        self.downsample_matrices = downsample_matrices
-        self.upsample_matrices = upsample_matrices
-        self.adjacency_matrices = adjacency_matrices
-        self.A_edge_index, self.A_norm = zip(*[ChebConv_Coma.norm(self.adjacency_matrices[i]._indices(),
-                                                                  num_nodes[i]) for i in range(len(num_nodes))])
-        self.cheb = torch.nn.ModuleList([ChebConv_Coma(self.filters[i], self.filters[i+1], self.K[i])
-                                         for i in range(len(self.filters)-2)])
-        self.cheb_dec = torch.nn.ModuleList([ChebConv_Coma(self.filters[-i-1], self.filters[-i-2], self.K[i])
-                                             for i in range(len(self.filters)-1)])
+        top_adj = template_adj
+        top_edge_index, top_norm = ChebConv_Coma.norm(top_adj._indices(), num_nodes[0])
+        top_dense_adj = top_adj.to_dense()
+
+        self.register_buffer('top_edge_index', top_edge_index)
+        self.register_buffer('top_norm', top_norm)
+        self.register_buffer('top_dense_adj', top_dense_adj)
+
+        self.cheb = []
+        self.cheb_dec = []
+        self.pools = []
+        self.unpools = []
+        self.num_nodes = num_nodes
+        for i in range(len(self.enc_filters) - 1):
+            if i == 0:
+                self.cheb.append(ChebConv_Coma(self.enc_filters[i], self.enc_filters[i + 1], self.K[i]))
+                self.pools.append(
+                    SparseDiffPool(self.num_nodes[i], self.num_nodes[i + 1], self.enc_filters[i + 1], self.K[i]))
+            else:  # use dense
+                self.cheb.append(DenseChebConv(self.enc_filters[i], self.enc_filters[i + 1], self.K[i]))
+                self.pools.append(
+                    DenseDiffPool(self.num_nodes[i], self.num_nodes[i + 1], self.enc_filters[i + 1], self.K[i]))
+
+        for i in range(len(self.dec_filters) - 1):
+            self.unpools.append(
+                DenseDiffPool(self.num_nodes[-1 - i], self.num_nodes[-2 - i], self.dec_filters[i], self.K[i]))
+            if i == len(self.dec_filters) - 2:
+                self.cheb_dec.append(
+                    ChebConv_Coma(self.dec_filters[i], self.dec_filters[i + 1], self.K[i]))  # note: K must be the same!
+            else:
+                self.cheb_dec.append(DenseChebConv(self.dec_filters[i], self.dec_filters[i + 1], self.K[i]))
+
         self.cheb_dec[-1].bias = None  # No bias for last convolution layer
 
         self.cheb = torch.nn.ModuleList(self.cheb)
@@ -70,12 +94,12 @@ class Coma(torch.nn.Module):
         x = F.relu(self.dec_lin(x))
         x = x.reshape(x.shape[0], -1, self.filters[-1])
         for i in range(self.n_layers):
-            x = self.pool(x, self.upsample_matrices[-i-1])
-            x = F.relu(self.cheb_dec[i](x, self.A_edge_index[self.n_layers-i-1], self.A_norm[self.n_layers-i-1]))
-        x = self.cheb_dec[-1](x, self.A_edge_index[-1], self.A_norm[-1])
-        return x
+            x, prev_adj, link_loss, ent_loss = self.unpools[i](x, prev_adj)
+            link_losses.append(link_loss)
+            ent_losses.append(ent_losses)
+            x = F.relu(self.cheb_dec[i](x, prev_adj))
+        return x, prev_adj, link_losses, ent_losses
 
     def reset_parameters(self):
         torch.nn.init.normal_(self.enc_lin.weight, 0, 0.1)
         torch.nn.init.normal_(self.dec_lin.weight, 0, 0.1)
-

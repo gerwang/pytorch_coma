@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torch_geometric.data import DataLoader
 
 from psbody.mesh import Mesh, MeshViewers
-# import mesh_operations
+import mesh_operations
 from config_parser import read_config
 from data import ComaDataset
 from model import Coma
@@ -80,10 +80,17 @@ def main(args):
     # print('Generating transforms')
     # M, A, D, U = mesh_operations.generate_transform_matrices(template_mesh, config['downsampling_factors'])
 
-    D_t = [scipy_to_torch_sparse(d).to(device) for d in D]
-    U_t = [scipy_to_torch_sparse(u).to(device) for u in U]
-    A_t = [scipy_to_torch_sparse(a).to(device) for a in A]
-    num_nodes = [len(M[i].v) for i in range(len(M))]
+    # D_t = [scipy_to_torch_sparse(d).to(device) for d in D]
+    # U_t = [scipy_to_torch_sparse(u).to(device) for u in U]
+    # A_t = [scipy_to_torch_sparse(a).to(device) for a in A]
+    # num_nodes = [len(M[i].v) for i in range(len(M))]
+
+    num_nodes = [len(template_mesh.v)]
+    for x in config['downsampling_factors']:
+        num_nodes.append(np.int(np.ceil(num_nodes[-1] / x)))
+    adj = mesh_operations.get_vert_connectivity(template_mesh.v, template_mesh.f).tocoo()
+    adj.data = np.ones_like(adj.data)
+    adj = scipy_to_torch_sparse(adj)  # prevbug: ftl
 
     print('Loading Dataset')
     if args.data_dir:
@@ -101,7 +108,7 @@ def main(args):
 
     print('Loading model')
     start_epoch = 1
-    coma = Coma(dataset, config, D_t, U_t, A_t, num_nodes)
+    coma = Coma(dataset, config, adj, num_nodes)
     if opt == 'adam':
         optimizer = torch.optim.Adam(coma.parameters(), lr=lr, weight_decay=weight_decay)
     elif opt == 'sgd':
