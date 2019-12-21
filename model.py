@@ -60,19 +60,15 @@ class Coma(torch.nn.Module):
         x, edge_index = data.x, data.edge_index
         batch_size = data.num_graphs
         x = x.reshape(batch_size, -1, self.enc_filters[0])
-        x, prev_adj, link_losses_1, ent_losses_1 = self.encoder(x)
-        x, prev_adj, link_losses_2, ent_losses_2 = self.decoder(x, prev_adj)
-        link_losses_1.extend(link_losses_2)
-        ent_losses_1.extend(ent_losses_2)
-        link_loss = torch.sum(torch.cat(link_losses_1))
-        ent_loss = torch.sum(torch.cat(ent_losses_1))
-        x = x.reshape(-1, self.filters[0])
-        return x, link_loss, ent_loss
+        x, prev_adj, link_loss_1, ent_loss_1 = self.encoder(x)
+        x, prev_adj, link_loss_2, ent_loss_2 = self.decoder(x, prev_adj)
+        x = x.reshape(-1, self.dec_filters[-1])
+        return x, link_loss_1 + link_loss_2, ent_loss_1 + ent_loss_2
 
     def encoder(self, x):
         prev_adj = None
-        link_losses = []
-        ent_losses = []
+        link_loss_sum = 0
+        ent_loss_sum = 0
         for i in range(self.n_layers):
             if prev_adj is None:
                 x = F.relu(self.cheb[i](x, self.top_edge_index, self.top_norm))
@@ -81,24 +77,27 @@ class Coma(torch.nn.Module):
             else:
                 x = F.relu(self.cheb[i](x, prev_adj))
                 x, prev_adj, link_loss, ent_loss = self.pools[i](x, prev_adj)
-            link_losses.append(link_loss)
-            ent_losses.append(ent_loss)
+            link_loss_sum += link_loss
+            ent_loss_sum += ent_loss
 
         x = x.reshape(x.shape[0], self.enc_lin.in_features)
         x = F.relu(self.enc_lin(x))
-        return x, prev_adj, link_losses, ent_losses
+        return x, prev_adj, link_loss_sum, ent_loss_sum
 
     def decoder(self, x, prev_adj):
-        link_losses = []
-        ent_losses = []
+        link_loss_sum = 0
+        ent_loss_sum = 0
         x = F.relu(self.dec_lin(x))
-        x = x.reshape(x.shape[0], -1, self.filters[-1])
+        x = x.reshape(x.shape[0], -1, self.dec_filters[0])
         for i in range(self.n_layers):
             x, prev_adj, link_loss, ent_loss = self.unpools[i](x, prev_adj)
-            link_losses.append(link_loss)
-            ent_losses.append(ent_losses)
-            x = F.relu(self.cheb_dec[i](x, prev_adj))
-        return x, prev_adj, link_losses, ent_losses
+            link_loss_sum += link_loss
+            ent_loss_sum += ent_loss
+            if i == self.n_layers - 1:
+                x = F.relu(self.cheb_dec[i](x, self.top_edge_index, self.top_norm))
+            else:
+                x = F.relu(self.cheb_dec[i](x, prev_adj))
+        return x, prev_adj, link_loss_sum, ent_loss_sum
 
     def reset_parameters(self):
         torch.nn.init.normal_(self.enc_lin.weight, 0, 0.1)

@@ -55,6 +55,8 @@ def read_config(fname):
     config_parms['polygon_order'] = [int(x) for x in config.get('Model Parameters', 'polygon_order').split(',')]
     config_parms['workers_thread'] = config.getint('Model Parameters', 'workers_thread')
     config_parms['optimizer'] = config.get('Model Parameters', 'optimizer')
+    config_parms['lambda_link'] = config.getfloat('Model Parameters', 'lambda_link')
+    config_parms['lambda_ent'] = config.getfloat('Model Parameters', 'lambda_ent')
 
     config_parms['batch_size'] = config.getint('Learning Parameters', 'batch_size')
     config_parms['learning_rate'] = config.getfloat('Learning Parameters', 'learning_rate')

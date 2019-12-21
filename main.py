@@ -77,14 +77,6 @@ def main(args):
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    # print('Generating transforms')
-    # M, A, D, U = mesh_operations.generate_transform_matrices(template_mesh, config['downsampling_factors'])
-
-    # D_t = [scipy_to_torch_sparse(d).to(device) for d in D]
-    # U_t = [scipy_to_torch_sparse(u).to(device) for u in U]
-    # A_t = [scipy_to_torch_sparse(a).to(device) for a in A]
-    # num_nodes = [len(M[i].v) for i in range(len(M))]
-
     num_nodes = [len(template_mesh.v)]
     for x in config['downsampling_factors']:
         num_nodes.append(np.int(np.ceil(num_nodes[-1] / x)))
@@ -140,7 +132,7 @@ def main(args):
 
     for epoch in range(start_epoch, total_epochs + 1):
         print("Training for epoch ", epoch)
-        train_loss = train(coma, train_loader, len(dataset), optimizer, device)
+        train_loss = train(coma, train_loader, len(dataset), optimizer, device, config)
         val_loss = evaluate(coma, output_dir, test_loader, dataset_test, template_mesh, device, visualize=visualize)
 
         print('epoch ', epoch, ' Train loss ', train_loss, ' Val loss ', val_loss)
@@ -158,15 +150,18 @@ def main(args):
         torch.cuda.synchronize()
 
 
-def train(coma, train_loader, len_dataset, optimizer, device):
+def train(coma, train_loader, len_dataset, optimizer, device, config):
+    lambda_link = config['lambda_link']
+    lambda_ent = config['lambda_ent']
     coma.train()
     total_loss = 0
     for data in train_loader:
         data = data.to(device)
         optimizer.zero_grad()
-        out = coma(data)
-        loss = F.l1_loss(out, data.y)
-        total_loss += data.num_graphs * loss.item()
+        out, link_loss, ent_loss = coma(data)
+        data_loss = F.l1_loss(out, data.y)
+        loss = data_loss + lambda_link * link_loss + lambda_ent * ent_loss
+        total_loss += data.num_graphs * data_loss.item()
         loss.backward()
         optimizer.step()
     return total_loss / len_dataset
