@@ -43,6 +43,7 @@ def read_config(fname):
     config_parms['checkpoint_dir'] = config.get('Input Output', 'checkpoint_dir')
     config_parms['template_fname'] = config.get('Input Output', 'template_fname')
     config_parms['visual_output_dir'] = config.get('Input Output', 'visual_output_dir')
+    config_parms['summary_dir'] = config.get('Input Output', 'summary_dir')
 
     config_parms['eval'] = config.getboolean('Model Parameters', 'eval')
     config_parms['checkpoint_file'] = config.get('Model Parameters', 'checkpoint_file')

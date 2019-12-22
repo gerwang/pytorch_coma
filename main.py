@@ -11,6 +11,8 @@ from config_parser import read_config
 from data import ComaDataset
 from model import Coma
 from transform import Normalize
+from tensorboardX import SummaryWriter
+from tqdm import tqdm
 
 
 def scipy_to_torch_sparse(scp_matrix):
@@ -130,9 +132,10 @@ def main(args):
     best_val_loss = float('inf')
     val_loss_history = []
 
+    writer = SummaryWriter(config['summary_dir'])
     for epoch in range(start_epoch, total_epochs + 1):
         print("Training for epoch ", epoch)
-        train_loss = train(coma, train_loader, len(dataset), optimizer, device, config)
+        train_loss = train(coma, train_loader, len(dataset), optimizer, device, config, writer, epoch)
         val_loss = evaluate(coma, output_dir, test_loader, dataset_test, template_mesh, device, visualize=visualize)
 
         print('epoch ', epoch, ' Train loss ', train_loss, ' Val loss ', val_loss)
@@ -150,21 +153,35 @@ def main(args):
         torch.cuda.synchronize()
 
 
-def train(coma, train_loader, len_dataset, optimizer, device, config):
+def train(coma, train_loader, len_dataset, optimizer, device, config, writer, cur_epoch):
     lambda_link = config['lambda_link']
     lambda_ent = config['lambda_ent']
     coma.train()
     total_loss = 0
-    for data in train_loader:
+    total_link_loss = 0
+    total_ent_loss = 0
+    for data in tqdm(train_loader):
         data = data.to(device)
         optimizer.zero_grad()
         out, link_loss, ent_loss = coma(data)
         data_loss = F.l1_loss(out, data.y)
-        loss = data_loss + lambda_link * link_loss + lambda_ent * ent_loss
+        # loss = data_loss + lambda_link * link_loss + lambda_ent * ent_loss
+        loss = data_loss
         total_loss += data.num_graphs * data_loss.item()
+        total_link_loss += link_loss.item()
+        total_ent_loss += ent_loss.item()
         loss.backward()
         optimizer.step()
-    return total_loss / len_dataset
+    total_link_loss /= len_dataset
+    total_ent_loss /= len_dataset
+    total_loss /= len_dataset
+
+    writer.add_scalar('data_loss', total_loss, cur_epoch)
+    writer.add_scalar('link_loss', total_link_loss, cur_epoch)
+    writer.add_scalar('ent_loss', total_ent_loss, cur_epoch)
+    writer.flush()
+
+    return total_loss
 
 
 def evaluate(coma, output_dir, test_loader, dataset, template_mesh, device, visualize=False):
@@ -174,7 +191,7 @@ def evaluate(coma, output_dir, test_loader, dataset, template_mesh, device, visu
     for i, data in enumerate(test_loader):
         data = data.to(device)
         with torch.no_grad():
-            out = coma(data)
+            out, _, _ = coma(data)
         loss = F.l1_loss(out, data.y)
         total_loss += data.num_graphs * loss.item()
 
