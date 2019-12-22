@@ -27,7 +27,6 @@ def scipy_to_torch_sparse(scp_matrix):
 
 
 def adjust_learning_rate(optimizer, lr_decay):
-
     for param_group in optimizer.param_groups:
         param_group['lr'] = param_group['lr'] * lr_decay
 
@@ -122,7 +121,7 @@ def main(args):
         start_epoch = checkpoint['epoch_num']
         coma.load_state_dict(checkpoint['state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer'])
-        #To find if this is fixed in pytorch
+        # To find if this is fixed in pytorch
         for state in optimizer.state.values():
             for k, v in state.items():
                 if isinstance(v, torch.Tensor):
@@ -140,7 +139,7 @@ def main(args):
     writer = SummaryWriter(config['summary_dir'])
     for epoch in range(start_epoch, total_epochs + 1):
         print("Training for epoch ", epoch)
-        train_loss = train(coma, train_loader, len(dataset), optimizer, device, config, writer, epoch)
+        train_loss = train(coma, train_loader, len(dataset), optimizer, device)
         val_loss, val_l2_loss = evaluate(coma, output_dir, val_loader, dataset_val, template_mesh, device,
                                          visualize=visualize)
 
@@ -152,7 +151,7 @@ def main(args):
         val_loss_history.append(val_loss)
         val_losses.append(best_val_loss)
 
-        if opt=='sgd':
+        if opt == 'sgd':
             adjust_learning_rate(optimizer, lr_decay)
 
     if torch.cuda.is_available():
@@ -162,7 +161,7 @@ def main(args):
 def train(coma, train_loader, len_dataset, optimizer, device):
     coma.train()
     total_loss = 0
-    for data in train_loader:
+    for data in tqdm(train_loader):
         data = data.to(device)
         optimizer.zero_grad()
         out = coma(data)
@@ -184,9 +183,15 @@ def evaluate(coma, output_dir, test_loader, dataset, template_mesh, device, visu
         with torch.no_grad():
             out = coma(data)
         loss = F.l1_loss(out, data.y)
-        out_unnorm = out * dataset.std + dataset.mean
-        data_unnorm = data.y * dataset.std + dataset.mean
-        l2_loss = F.mse_loss(out_unnorm, data_unnorm)
+
+        def reshape_unnorm(x, mean, std):
+            x = x.to(mean.device)
+            x = x.view(-1, mean.size(0), mean.size(1))
+            x = x * std + mean
+            return x
+
+        l2_loss = F.mse_loss(reshape_unnorm(out, dataset.mean, dataset.std),
+                             reshape_unnorm(data.y, dataset.mean, dataset.std))
         total_loss += data.num_graphs * loss.item()
         total_unnormalized_l2_loss += data.num_graphs * l2_loss.item()
 
