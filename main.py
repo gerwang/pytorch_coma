@@ -11,6 +11,8 @@ from config_parser import read_config
 from data import ComaDataset
 from model import Coma
 from transform import Normalize
+from tensorboardX import SummaryWriter
+from tqdm import tqdm
 
 
 def scipy_to_torch_sparse(scp_matrix):
@@ -23,10 +25,12 @@ def scipy_to_torch_sparse(scp_matrix):
     sparse_tensor = torch.sparse.FloatTensor(i, v, torch.Size(shape))
     return sparse_tensor
 
+
 def adjust_learning_rate(optimizer, lr_decay):
 
     for param_group in optimizer.param_groups:
         param_group['lr'] = param_group['lr'] * lr_decay
+
 
 def save_model(coma, optimizer, epoch, train_loss, val_loss, checkpoint_dir):
     checkpoint = {}
@@ -35,7 +39,7 @@ def save_model(coma, optimizer, epoch, train_loss, val_loss, checkpoint_dir):
     checkpoint['epoch_num'] = epoch
     checkpoint['train_loss'] = train_loss
     checkpoint['val_loss'] = val_loss
-    torch.save(checkpoint, os.path.join(checkpoint_dir, 'checkpoint_'+ str(epoch)+'.pt'))
+    torch.save(checkpoint, os.path.join(checkpoint_dir, 'checkpoint_' + str(epoch) + '.pt'))
 
 
 def main(args):
@@ -91,10 +95,15 @@ def main(args):
         data_dir = config['data_dir']
 
     normalize_transform = Normalize()
-    dataset = ComaDataset(data_dir, dtype='train', split=args.split, split_term=args.split_term, pre_transform=normalize_transform)
-    dataset_test = ComaDataset(data_dir, dtype='test', split=args.split, split_term=args.split_term, pre_transform=normalize_transform)
+    dataset = ComaDataset(data_dir, dtype='train', split=args.split, split_term=args.split_term,
+                          pre_transform=normalize_transform)
+    dataset_test = ComaDataset(data_dir, dtype='test', split=args.split, split_term=args.split_term,
+                               pre_transform=normalize_transform)
+    dataset_val = ComaDataset(data_dir, dtype='val', split=args.split, split_term=args.split_term,
+                              pre_transform=normalize_transform)
     train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=workers_thread)
     test_loader = DataLoader(dataset_test, batch_size=1, shuffle=False, num_workers=workers_thread)
+    val_loader = DataLoader(dataset_val, batch_size=batch_size, shuffle=False, num_workers=workers_thread)
 
     print('Loading model')
     start_epoch = 1
@@ -121,19 +130,21 @@ def main(args):
     coma.to(device)
 
     if eval_flag:
-        val_loss = evaluate(coma, output_dir, test_loader, dataset_test, template_mesh, device, visualize)
-        print('val loss', val_loss)
+        val_loss, val_l2_loss = evaluate(coma, output_dir, test_loader, dataset_test, template_mesh, device, visualize)
+        print('val loss: l1 {}, unnorm l2 {}'.format(val_loss, val_l2_loss))
         return
 
     best_val_loss = float('inf')
     val_loss_history = []
 
+    writer = SummaryWriter(config['summary_dir'])
     for epoch in range(start_epoch, total_epochs + 1):
         print("Training for epoch ", epoch)
-        train_loss = train(coma, train_loader, len(dataset), optimizer, device)
-        val_loss = evaluate(coma, output_dir, test_loader, dataset_test, template_mesh, device, visualize=visualize)
+        train_loss = train(coma, train_loader, len(dataset), optimizer, device, config, writer, epoch)
+        val_loss, val_l2_loss = evaluate(coma, output_dir, val_loader, dataset_val, template_mesh, device,
+                                         visualize=visualize)
 
-        print('epoch ', epoch,' Train loss ', train_loss, ' Val loss ', val_loss)
+        print('epoch ', epoch, ' Train loss ', train_loss, ' Val loss ', val_loss, 'Val l2 loss', val_l2_loss)
         if val_loss < best_val_loss:
             save_model(coma, optimizer, epoch, train_loss, val_loss, checkpoint_dir)
             best_val_loss = val_loss
@@ -165,25 +176,31 @@ def train(coma, train_loader, len_dataset, optimizer, device):
 def evaluate(coma, output_dir, test_loader, dataset, template_mesh, device, visualize=False):
     coma.eval()
     total_loss = 0
-    meshviewer = MeshViewers(shape=(1, 2))
-    for i, data in enumerate(test_loader):
+    total_unnormalized_l2_loss = 0
+    if visualize:
+        meshviewer = MeshViewers(shape=(1, 2))
+    for i, data in tqdm(enumerate(test_loader)):
         data = data.to(device)
         with torch.no_grad():
             out = coma(data)
         loss = F.l1_loss(out, data.y)
+        out_unnorm = out * dataset.std + dataset.mean
+        data_unnorm = data.y * dataset.std + dataset.mean
+        l2_loss = F.mse_loss(out_unnorm, data_unnorm)
         total_loss += data.num_graphs * loss.item()
+        total_unnormalized_l2_loss += data.num_graphs * l2_loss.item()
 
         if visualize and i % 100 == 0:
             save_out = out.detach().cpu().numpy()
-            save_out = save_out*dataset.std.numpy()+dataset.mean.numpy()
-            expected_out = (data.y.detach().cpu().numpy())*dataset.std.numpy()+dataset.mean.numpy()
+            save_out = save_out * dataset.std.numpy() + dataset.mean.numpy()
+            expected_out = (data.y.detach().cpu().numpy()) * dataset.std.numpy() + dataset.mean.numpy()
             result_mesh = Mesh(v=save_out, f=template_mesh.f)
             expected_mesh = Mesh(v=expected_out, f=template_mesh.f)
             meshviewer[0][0].set_dynamic_meshes([result_mesh])
             meshviewer[0][1].set_dynamic_meshes([expected_mesh])
-            meshviewer[0][0].save_snapshot(os.path.join(output_dir, 'file'+str(i)+'.png'), blocking=False)
+            meshviewer[0][0].save_snapshot(os.path.join(output_dir, 'file' + str(i) + '.png'), blocking=False)
 
-    return total_loss/len(dataset)
+    return total_loss / len(dataset), total_unnormalized_l2_loss / len(dataset)
 
 
 if __name__ == '__main__':
@@ -192,7 +209,7 @@ if __name__ == '__main__':
     parser.add_argument('-c', '--conf', help='path of config file')
     parser.add_argument('-s', '--split', default='sliced', help='split can be sliced, expression or identity ')
     parser.add_argument('-st', '--split_term', default='sliced', help='split term can be sliced, expression name '
-                                                               'or identity name')
+                                                                      'or identity name')
     parser.add_argument('-d', '--data_dir', help='path where the downloaded data is stored')
     parser.add_argument('-cp', '--checkpoint_dir', help='path where checkpoints file need to be stored')
 
