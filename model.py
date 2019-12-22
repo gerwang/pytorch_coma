@@ -3,6 +3,7 @@ import torch.nn.functional as F
 
 from layers import ChebConv_Coma, Pool
 
+
 class Coma(torch.nn.Module):
 
     def __init__(self, dataset, config, downsample_matrices, upsample_matrices, adjacency_matrices, num_nodes):
@@ -23,8 +24,8 @@ class Coma(torch.nn.Module):
                                              for i in range(len(self.filters)-1)])
         self.cheb_dec[-1].bias = None  # No bias for last convolution layer
         self.pool = Pool()
-        self.enc_lin = torch.nn.Linear(self.downsample_matrices[-1].shape[0]*self.filters[-1], self.z)
-        self.dec_lin = torch.nn.Linear(self.z, self.filters[-1]*self.upsample_matrices[-1].shape[1])
+        self.enc_lin = torch.nn.Linear(self.downsample_matrices[-1].shape[0] * self.filters[-1], self.z)
+        self.dec_lin = torch.nn.Linear(self.z, self.filters[-1] * self.upsample_matrices[-1].shape[1])
         self.reset_parameters()
 
     def forward(self, data):
@@ -56,4 +57,3 @@ class Coma(torch.nn.Module):
     def reset_parameters(self):
         torch.nn.init.normal_(self.enc_lin.weight, 0, 0.1)
         torch.nn.init.normal_(self.dec_lin.weight, 0, 0.1)
-
