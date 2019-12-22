@@ -79,6 +79,14 @@ def main(args):
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+    print('Generating transforms')
+    M, A, D, U = mesh_operations.generate_transform_matrices(template_mesh, config['downsampling_factors'])
+
+    D_t = [scipy_to_torch_sparse(d).to(device) for d in D]
+    U_t = [scipy_to_torch_sparse(u).to(device) for u in U]
+    A_t = [scipy_to_torch_sparse(a).to(device) for a in A]
+    coma_num_nodes = [len(M[i].v) for i in range(len(M))]
+
     num_nodes = [len(template_mesh.v)]
     for x in config['downsampling_factors']:
         num_nodes.append(np.int(np.ceil(num_nodes[-1] / x)))
@@ -102,7 +110,7 @@ def main(args):
 
     print('Loading model')
     start_epoch = 1
-    coma = Coma(dataset, config, adj, num_nodes)
+    coma = Coma(dataset, config, adj, num_nodes, D_t, U_t, A_t, coma_num_nodes)
     if opt == 'adam':
         optimizer = torch.optim.Adam(coma.parameters(), lr=lr, weight_decay=weight_decay)
     elif opt == 'sgd':
@@ -165,8 +173,10 @@ def train(coma, train_loader, len_dataset, optimizer, device, config, writer, cu
         optimizer.zero_grad()
         out, link_loss, ent_loss = coma(data)
         data_loss = F.l1_loss(out, data.y)
-        # loss = data_loss + lambda_link * link_loss + lambda_ent * ent_loss
+        # loss = data_loss + lambda_link * link_loss + lambda_ent * ent_loss # TODO
         loss = data_loss
+        if torch.any(torch.isnan(data_loss)):
+            pass
         total_loss += data.num_graphs * data_loss.item()
         total_link_loss += link_loss.item()
         total_ent_loss += ent_loss.item()
@@ -188,7 +198,7 @@ def evaluate(coma, output_dir, test_loader, dataset, template_mesh, device, visu
     coma.eval()
     total_loss = 0
     meshviewer = MeshViewers(shape=(1, 2))
-    for i, data in enumerate(test_loader):
+    for i, data in tqdm(enumerate(test_loader)):
         data = data.to(device)
         with torch.no_grad():
             out, _, _ = coma(data)
