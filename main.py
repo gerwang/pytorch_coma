@@ -11,6 +11,7 @@ from config_parser import read_config
 from data import ComaDataset
 from model import Coma
 from transform import Normalize
+from tqdm import tqdm
 
 
 def scipy_to_torch_sparse(scp_matrix):
@@ -98,8 +99,11 @@ def main(args):
                           pre_transform=normalize_transform)
     dataset_test = ComaDataset(data_dir, dtype='test', split=args.split, split_term=args.split_term,
                                pre_transform=normalize_transform)
+    dataset_val = ComaDataset(data_dir, dtype='val', split=args.split, split_term=args.split_term,
+                              pre_transform=normalize_transform)
     train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=workers_thread)
     test_loader = DataLoader(dataset_test, batch_size=1, shuffle=False, num_workers=workers_thread)
+    val_loader = DataLoader(dataset_val, batch_size=batch_size, shuffle=False, num_workers=workers_thread)
 
     print('Loading model')
     start_epoch = 1
@@ -136,7 +140,7 @@ def main(args):
     for epoch in range(start_epoch, total_epochs + 1):
         print("Training for epoch ", epoch)
         train_loss = train(coma, train_loader, len(dataset), optimizer, device)
-        val_loss = evaluate(coma, output_dir, test_loader, dataset_test, template_mesh, device, visualize=visualize)
+        val_loss = evaluate(coma, output_dir, val_loader, dataset_val, template_mesh, device, visualize=visualize)
 
         print('epoch ', epoch, ' Train loss ', train_loss, ' Val loss ', val_loss)
         if val_loss < best_val_loss:
@@ -156,7 +160,7 @@ def main(args):
 def train(coma, train_loader, len_dataset, optimizer, device):
     coma.train()
     total_loss = 0
-    for data in train_loader:
+    for data in tqdm(train_loader):
         data = data.to(device)
         optimizer.zero_grad()
         out = coma(data)
@@ -170,8 +174,9 @@ def train(coma, train_loader, len_dataset, optimizer, device):
 def evaluate(coma, output_dir, test_loader, dataset, template_mesh, device, visualize=False):
     coma.eval()
     total_loss = 0
-    meshviewer = MeshViewers(shape=(1, 2))
-    for i, data in enumerate(test_loader):
+    if visualize:
+        meshviewer = MeshViewers(shape=(1, 2))
+    for i, data in tqdm(enumerate(test_loader)):
         data = data.to(device)
         with torch.no_grad():
             out = coma(data)
