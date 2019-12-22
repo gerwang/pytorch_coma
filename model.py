@@ -50,7 +50,7 @@ class Coma(torch.nn.Module):
         for i in range(self.n_layers):
             x = self.pool(x, self.upsample_matrices[-i-1])
             x = F.relu(self.cheb_dec[i](x, self.A_edge_index[self.n_layers-i-1], self.A_norm[self.n_layers-i-1]))
-        x = self.cheb_dec[-1](x, self.A_edge_index[-1], self.A_norm[-1])
+        x = self.cheb_dec[-1](x, self.A_edge_index[0], self.A_norm[0])
         return x
 
     def reset_parameters(self):
