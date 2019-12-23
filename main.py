@@ -42,6 +42,7 @@ def save_model(coma, optimizer, epoch, train_loss, val_loss, checkpoint_dir):
 
 
 def main(args):
+    # torch.autograd.set_detect_anomaly(True) # this will slow down the program
     if not os.path.exists(args.conf):
         print('Config not found' + args.conf)
 
@@ -177,8 +178,8 @@ def train(coma, train_loader, len_dataset, optimizer, device, config, writer, cu
         optimizer.zero_grad()
         out, link_loss, ent_loss = coma(data)
         data_loss = F.l1_loss(out, data.y)
-        # loss = data_loss + lambda_link * link_loss + lambda_ent * ent_loss # TODO
-        loss = data_loss
+        loss = data_loss + lambda_link * link_loss # + lambda_ent * ent_loss
+        # loss = data_loss
         if torch.any(torch.isnan(data_loss)):
             pass
         total_loss += data.num_graphs * data_loss.item()
@@ -209,9 +210,15 @@ def evaluate(coma, output_dir, test_loader, dataset, template_mesh, device, visu
         with torch.no_grad():
             out, _, _ = coma(data)
         loss = F.l1_loss(out, data.y)
-        out_unnorm = out * dataset.std + dataset.mean
-        data_unnorm = data.y * dataset.std + dataset.mean
-        l2_loss = F.mse_loss(out_unnorm, data_unnorm)
+
+        def reshape_unnorm(x, mean, std):
+            x = x.to(mean.device)
+            x = x.view(-1, mean.size(0), mean.size(1))
+            x = x * std + mean
+            return x
+
+        l2_loss = F.mse_loss(reshape_unnorm(out, dataset.mean, dataset.std),
+                             reshape_unnorm(data.y, dataset.mean, dataset.std))
         total_loss += data.num_graphs * loss.item()
         total_unnormalized_l2_loss += data.num_graphs * l2_loss.item()
 
