@@ -143,7 +143,7 @@ def main(args):
         val_loss, val_l2_loss = evaluate(coma, output_dir, val_loader, dataset_val, template_mesh, device,
                                          visualize=visualize)
 
-        print('epoch ', epoch, ' Train loss ', train_loss, ' Val loss ', val_loss)
+        print('epoch ', epoch, ' Train loss ', train_loss, ' Val loss ', val_loss, 'Val L2 loss ', val_l2_loss)
         if val_loss < best_val_loss:
             save_model(coma, optimizer, epoch, train_loss, val_loss, checkpoint_dir)
             best_val_loss = val_loss
