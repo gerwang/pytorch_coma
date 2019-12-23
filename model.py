@@ -57,13 +57,13 @@ class Coma(torch.nn.Module):
         x = self.dec_lin(x)
         x = x.reshape(x.shape[0], -1, self.dec_filters[0])
         feat_list = [x[:, :, :self.enc_filters[0]]]
-        x[:, :, self.enc_filters[0]:] = F.relu(x[:, :, self.enc_filters[0]:])
+        x[:, :, self.enc_filters[0]:] = F.relu(x[:, :, self.enc_filters[0]:].clone())
         for i in range(self.n_layers):
             x = self.pool(x, self.upsample_matrices[-i - 1])
             x = self.cheb_dec[i](x, self.A_edge_index[self.n_layers - i - 1], self.A_norm[self.n_layers - i - 1])
             feat_list.append(x[:, :, :self.enc_filters[0]])
             if i < self.n_layers - 1:
-                x[:, :, self.enc_filters[0]:] = F.relu(x[:, :, self.enc_filters[0]:])
+                x[:, :, self.enc_filters[0]:] = F.relu(x[:, :, self.enc_filters[0]:].clone())
         feat_list = list(reversed(feat_list))
         return x, feat_list
 
