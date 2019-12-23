@@ -45,7 +45,7 @@ class Coma(torch.nn.Module):
         self.cheb_dec = torch.nn.ModuleList([ChebConv_Coma(self.dec_filters[i], self.dec_filters[i + 1], self.K[i])
                                              for i in range(len(self.dec_filters) - 1)])
 
-        self.cheb_dec[-1].bias = None  # No bias for last convolution layer
+        # self.cheb_dec[-1].bias = None  # No bias for last convolution layer
 
         self.cheb = torch.nn.ModuleList(self.cheb)
         self.pools = torch.nn.ModuleList(self.pools)
@@ -91,8 +91,9 @@ class Coma(torch.nn.Module):
         x = x.reshape(x.shape[0], -1, self.dec_filters[0])
         for i in range(self.n_layers):
             x = self.unpool(x, self.upsample_matrices[-i - 1])
-            x = F.relu(
-                self.cheb_dec[i](x, self.A_edge_index[self.n_layers - i - 1], self.A_norm[self.n_layers - i - 1]))
+            x = self.cheb_dec[i](x, self.A_edge_index[self.n_layers - i - 1], self.A_norm[self.n_layers - i - 1])
+            if i + 1 < self.n_layers:
+                x = F.relu(x)
         return x
 
     def reset_parameters(self):
