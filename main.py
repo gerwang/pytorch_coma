@@ -43,6 +43,7 @@ def save_model(coma, optimizer, epoch, train_loss, val_loss, checkpoint_dir):
 
 def main(args):
     # torch.autograd.set_detect_anomaly(True) # this will slow down the program
+    torch.manual_seed(2)
     if not os.path.exists(args.conf):
         print('Config not found' + args.conf)
 
