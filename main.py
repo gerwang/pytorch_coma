@@ -42,6 +42,8 @@ def save_model(coma, optimizer, epoch, train_loss, val_loss, checkpoint_dir):
 
 
 def main(args):
+    # torch.autograd.set_detect_anomaly(True) # this will slow down the program
+    torch.manual_seed(2)
     if not os.path.exists(args.conf):
         print('Config not found' + args.conf)
 
@@ -97,8 +99,11 @@ def main(args):
                           pre_transform=normalize_transform)
     dataset_test = ComaDataset(data_dir, dtype='test', split=args.split, split_term=args.split_term,
                                pre_transform=normalize_transform)
+    dataset_val = ComaDataset(data_dir, dtype='val', split=args.split, split_term=args.split_term,
+                              pre_transform=normalize_transform)
     train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=workers_thread)
     test_loader = DataLoader(dataset_test, batch_size=1, shuffle=False, num_workers=workers_thread)
+    val_loader = DataLoader(dataset_val, batch_size=batch_size, shuffle=False, num_workers=workers_thread)
 
     print('Loading model')
     start_epoch = 1
@@ -125,8 +130,8 @@ def main(args):
     coma.to(device)
 
     if eval_flag:
-        val_loss = evaluate(coma, output_dir, test_loader, dataset_test, template_mesh, device, visualize)
-        print('val loss', val_loss)
+        val_loss, val_l2_loss = evaluate(coma, output_dir, test_loader, dataset_test, template_mesh, device, visualize)
+        print('val loss: l1 {}, unnorm l2 {}'.format(val_loss, val_l2_loss))
         return
 
     best_val_loss = float('inf')
@@ -136,9 +141,10 @@ def main(args):
     for epoch in range(start_epoch, total_epochs + 1):
         print("Training for epoch ", epoch)
         train_loss = train(coma, train_loader, len(dataset), optimizer, device, config, writer, epoch)
-        val_loss = evaluate(coma, output_dir, test_loader, dataset_test, template_mesh, device, visualize=visualize)
+        val_loss, val_l2_loss = evaluate(coma, output_dir, val_loader, dataset_val, template_mesh, device,
+                                         visualize=visualize)
 
-        print('epoch ', epoch, ' Train loss ', train_loss, ' Val loss ', val_loss)
+        print('epoch ', epoch, ' Train loss ', train_loss, ' Val loss ', val_loss, 'Val l2 loss', val_l2_loss)
         if val_loss < best_val_loss:
             save_model(coma, optimizer, epoch, train_loss, val_loss, checkpoint_dir)
             best_val_loss = val_loss
@@ -165,8 +171,10 @@ def train(coma, train_loader, len_dataset, optimizer, device, config, writer, cu
         optimizer.zero_grad()
         out, link_loss, ent_loss = coma(data)
         data_loss = F.l1_loss(out, data.y)
-        # loss = data_loss + lambda_link * link_loss + lambda_ent * ent_loss
-        loss = data_loss
+        loss = data_loss + lambda_link * link_loss + lambda_ent * ent_loss
+        # loss = data_loss
+        if torch.any(torch.isnan(data_loss)):
+            pass
         total_loss += data.num_graphs * data_loss.item()
         total_link_loss += link_loss.item()
         total_ent_loss += ent_loss.item()
@@ -187,13 +195,25 @@ def train(coma, train_loader, len_dataset, optimizer, device, config, writer, cu
 def evaluate(coma, output_dir, test_loader, dataset, template_mesh, device, visualize=False):
     coma.eval()
     total_loss = 0
-    meshviewer = MeshViewers(shape=(1, 2))
-    for i, data in enumerate(test_loader):
+    total_unnormalized_l2_loss = 0
+    if visualize:
+        meshviewer = MeshViewers(shape=(1, 2))
+    for i, data in tqdm(enumerate(test_loader)):
         data = data.to(device)
         with torch.no_grad():
             out, _, _ = coma(data)
         loss = F.l1_loss(out, data.y)
+
+        def reshape_unnorm(x, mean, std):
+            x = x.to(mean.device)
+            x = x.view(-1, mean.size(0), mean.size(1))
+            x = x * std + mean
+            return x
+
+        l2_loss = F.mse_loss(reshape_unnorm(out, dataset.mean, dataset.std),
+                             reshape_unnorm(data.y, dataset.mean, dataset.std))
         total_loss += data.num_graphs * loss.item()
+        total_unnormalized_l2_loss += data.num_graphs * l2_loss.item()
 
         if visualize and i % 100 == 0:
             save_out = out.detach().cpu().numpy()
@@ -205,7 +225,7 @@ def evaluate(coma, output_dir, test_loader, dataset, template_mesh, device, visu
             meshviewer[0][1].set_dynamic_meshes([expected_mesh])
             meshviewer[0][0].save_snapshot(os.path.join(output_dir, 'file' + str(i) + '.png'), blocking=False)
 
-    return total_loss / len(dataset)
+    return total_loss / len(dataset), total_unnormalized_l2_loss / len(dataset)
 
 
 if __name__ == '__main__':

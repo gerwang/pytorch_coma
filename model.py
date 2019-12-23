@@ -1,7 +1,8 @@
 import torch
 import torch.nn.functional as F
+from torch_geometric.nn import DenseSAGEConv
 
-from layers import ChebConv_Coma, Pool, DenseChebConv, SparseDiffPool, DenseDiffPool
+from layers import ChebConv_Coma, SparseDiffPool, DenseDiffPool
 
 
 class Coma(torch.nn.Module):
@@ -30,11 +31,11 @@ class Coma(torch.nn.Module):
             if i == 0:
                 self.cheb.append(ChebConv_Coma(self.enc_filters[i], self.enc_filters[i + 1], self.K[i]))
                 self.pools.append(
-                    SparseDiffPool(self.num_nodes[i], self.num_nodes[i + 1], self.enc_filters[i + 1], self.K[i]))
+                    SparseDiffPool(self.num_nodes[i], self.num_nodes[i + 1], self.enc_filters[i], self.K[i]))
             else:  # use dense
-                self.cheb.append(DenseChebConv(self.enc_filters[i], self.enc_filters[i + 1], self.K[i]))
+                self.cheb.append(DenseSAGEConv(self.enc_filters[i], self.enc_filters[i + 1]))
                 self.pools.append(
-                    DenseDiffPool(self.num_nodes[i], self.num_nodes[i + 1], self.enc_filters[i + 1], self.K[i]))
+                    DenseDiffPool(self.num_nodes[i], self.num_nodes[i + 1], self.enc_filters[i], self.K[i]))
 
         for i in range(len(self.dec_filters) - 1):
             self.unpools.append(
@@ -43,9 +44,9 @@ class Coma(torch.nn.Module):
                 self.cheb_dec.append(
                     ChebConv_Coma(self.dec_filters[i], self.dec_filters[i + 1], self.K[i]))  # note: K must be the same!
             else:
-                self.cheb_dec.append(DenseChebConv(self.dec_filters[i], self.dec_filters[i + 1], self.K[i]))
+                self.cheb_dec.append(DenseSAGEConv(self.dec_filters[i], self.dec_filters[i + 1]))
 
-        self.cheb_dec[-1].bias = None  # No bias for last convolution layer
+        # self.cheb_dec[-1].bias = None  # No bias for last convolution layer
 
         self.cheb = torch.nn.ModuleList(self.cheb)
         self.cheb_dec = torch.nn.ModuleList(self.cheb_dec)
@@ -71,12 +72,14 @@ class Coma(torch.nn.Module):
         ent_loss_sum = 0
         for i in range(self.n_layers):
             if prev_adj is None:
+                prev_x = x
                 x = F.relu(self.cheb[i](x, self.top_edge_index, self.top_norm))
-                x, prev_adj, link_loss, ent_loss = self.pools[i](x, self.top_edge_index, self.top_norm,
+                x, prev_adj, link_loss, ent_loss = self.pools[i](prev_x, x, self.top_edge_index, self.top_norm,
                                                                  self.top_dense_adj)
             else:
+                prev_x = x
                 x = F.relu(self.cheb[i](x, prev_adj))
-                x, prev_adj, link_loss, ent_loss = self.pools[i](x, prev_adj)
+                x, prev_adj, link_loss, ent_loss = self.pools[i](prev_x, x, prev_adj)
             link_loss_sum += link_loss
             ent_loss_sum += ent_loss
 
@@ -90,14 +93,15 @@ class Coma(torch.nn.Module):
         x = F.relu(self.dec_lin(x))
         x = x.reshape(x.shape[0], -1, self.dec_filters[0])
         for i in range(self.n_layers):
-            x, prev_adj, link_loss, ent_loss = self.unpools[i](x, prev_adj)
+            x, prev_adj, link_loss, ent_loss = self.unpools[i](x, x, prev_adj)
             link_loss_sum += link_loss
             ent_loss_sum += ent_loss
             if i == self.n_layers - 1:
-                x = F.relu(self.cheb_dec[i](x, self.top_edge_index, self.top_norm))
+                x = self.cheb_dec[i](x, self.top_edge_index, self.top_norm)
             else:
                 x = F.relu(self.cheb_dec[i](x, prev_adj))
-        return x, prev_adj, link_loss_sum, ent_loss_sum
+        # return x, prev_adj, link_loss_sum, ent_loss_sum
+        return x, prev_adj, 0, 0  # for decoder, I don't know what those connectivities are
 
     def reset_parameters(self):
         torch.nn.init.normal_(self.enc_lin.weight, 0, 0.1)
