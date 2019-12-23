@@ -1,7 +1,8 @@
 import torch
 import torch.nn.functional as F
+from torch_geometric.nn import DenseSAGEConv
 
-from layers import ChebConv_Coma, Pool, DenseChebConv, SparseDiffPool, DenseDiffPool
+from layers import ChebConv_Coma, Pool, SparseDiffPool, DenseDiffPool
 
 
 class Coma(torch.nn.Module):
@@ -35,11 +36,11 @@ class Coma(torch.nn.Module):
             if i == 0:
                 self.cheb.append(ChebConv_Coma(self.enc_filters[i], self.enc_filters[i + 1], self.K[i]))
                 self.pools.append(
-                    SparseDiffPool(self.num_nodes[i], self.num_nodes[i + 1], self.enc_filters[i + 1], self.K[i]))
+                    SparseDiffPool(self.num_nodes[i], self.num_nodes[i + 1], self.enc_filters[i], self.K[i]))
             else:  # use dense
-                self.cheb.append(DenseChebConv(self.enc_filters[i], self.enc_filters[i + 1], self.K[i]))
+                self.cheb.append(DenseSAGEConv(self.enc_filters[i], self.enc_filters[i + 1]))
                 self.pools.append(
-                    DenseDiffPool(self.num_nodes[i], self.num_nodes[i + 1], self.enc_filters[i + 1], self.K[i]))
+                    DenseDiffPool(self.num_nodes[i], self.num_nodes[i + 1], self.enc_filters[i], self.K[i]))
 
         self.cheb_dec = torch.nn.ModuleList([ChebConv_Coma(self.dec_filters[i], self.dec_filters[i + 1], self.K[i])
                                              for i in range(len(self.dec_filters) - 1)])
@@ -70,12 +71,14 @@ class Coma(torch.nn.Module):
         ent_loss_sum = 0
         for i in range(self.n_layers):
             if prev_adj is None:
+                prev_x = x
                 x = F.relu(self.cheb[i](x, self.top_edge_index, self.top_norm))
-                x, prev_adj, link_loss, ent_loss = self.pools[i](x, self.top_edge_index, self.top_norm,
+                x, prev_adj, link_loss, ent_loss = self.pools[i](prev_x, x, self.top_edge_index, self.top_norm,
                                                                  self.top_dense_adj)
             else:
+                prev_x = x
                 x = F.relu(self.cheb[i](x, prev_adj))
-                x, prev_adj, link_loss, ent_loss = self.pools[i](x, prev_adj)
+                x, prev_adj, link_loss, ent_loss = self.pools[i](prev_x, x, prev_adj)
             link_loss_sum += link_loss
             ent_loss_sum += ent_loss
 

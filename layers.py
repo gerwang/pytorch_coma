@@ -5,6 +5,7 @@ from torch_geometric.nn.conv.cheb_conv import ChebConv
 from torch_geometric.utils import remove_self_loops
 import torch.nn as nn
 from torch_geometric.nn.dense.diff_pool import dense_diff_pool
+from torch_geometric.nn import DenseSAGEConv
 
 from utils import normal
 
@@ -99,7 +100,8 @@ class DenseChebConv(nn.Module):
         """
         d_vec = torch.sum(adj, dim=1)
         # D = torch.diag(d_vec)  # column wise add
-        inv_sqrt_d = d_vec.pow(-1 / 2)
+        inv_sqrt_d = d_vec.pow(-1 / 2)  # prevbug: here causes nan
+        inv_sqrt_d[torch.isnan(inv_sqrt_d)] = 0
         inv_sqrt_D = torch.diag(inv_sqrt_d)
         L = inv_sqrt_D @ -adj @ inv_sqrt_D  # fixme: low efficiency TODO: not real D_sym?
 
@@ -128,11 +130,9 @@ class SparseDiffPool(nn.Module):
         self.out_vertices = out_vertices
         self.channels = channels
         self.K = K
-        self.data_conv = ChebConv_Coma(channels, channels, K, normalization=normalization, bias=bias)
         self.pool_conv = ChebConv_Coma(channels, out_vertices, K, normalization=normalization, bias=bias)
 
-    def forward(self, x, edge_index, norm, dense_adj, edge_weight=None):
-        z = self.data_conv(x, edge_index, norm, edge_weight)
+    def forward(self, x, z, edge_index, norm, dense_adj, edge_weight=None):
         x_mean = x.mean(dim=0, keepdim=True)
         s = self.pool_conv(x_mean, edge_index, norm, edge_weight)[0]
         out, out_adj, link_loss, ent_loss = dense_diff_pool(z, dense_adj, s)
@@ -146,11 +146,10 @@ class DenseDiffPool(nn.Module):
         self.out_vertices = out_vertices
         self.channels = channels
         self.K = K
-        self.data_conv = DenseChebConv(channels, channels, K, bias=bias)
-        self.pool_conv = DenseChebConv(channels, out_vertices, K, bias=bias)
+        self.pool_conv = DenseSAGEConv(channels, out_vertices)
+        # self.pool_conv = DenseChebConv(channels, out_vertices, K, bias=bias)
 
-    def forward(self, x, adj):
-        z = self.data_conv(x, adj)
+    def forward(self, x, z, adj):
         x_mean = x.mean(dim=0, keepdim=True)
         s = self.pool_conv(x_mean, adj)[0]
         out, out_adj, link_loss, ent_loss = dense_diff_pool(z, adj, s)

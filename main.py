@@ -179,7 +179,7 @@ def train(coma, train_loader, len_dataset, optimizer, device, config, writer, cu
         optimizer.zero_grad()
         out, link_loss, ent_loss = coma(data)
         data_loss = F.l1_loss(out, data.y)
-        loss = data_loss + lambda_link * link_loss # + lambda_ent * ent_loss
+        loss = data_loss + lambda_link * link_loss + lambda_ent * ent_loss
         # loss = data_loss
         if torch.any(torch.isnan(data_loss)):
             pass
