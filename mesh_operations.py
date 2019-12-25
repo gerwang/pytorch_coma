@@ -283,9 +283,9 @@ def generate_transform_matrices(mesh, factors, front_ratios):
     A.append(get_vert_connectivity(mesh.v, mesh.f).tocoo())
     M.append(mesh)
 
-    from face_mask import front_face_mask
+    from face_mask import jaw_mask
     front_vec = np.zeros((M[0].v.shape[0],), dtype=np.int32)
-    front_vec[front_face_mask] = 1
+    front_vec[jaw_mask] = 1
 
     for i, factor in enumerate(factors):
         ds_f, ds_D = qslim_decimator_transformer(M[-1], front_vec, front_ratios[i], factor=factor)

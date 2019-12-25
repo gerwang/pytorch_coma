@@ -99,9 +99,9 @@ def main(args):
             m.write_obj(os.path.join(config['visual_output_dir'], '{}.obj'.format(m.v.shape[0])))
 
     def output_front_ratio():
-        from face_mask import front_face_mask
+        from face_mask import jaw_mask
         front_vec = np.zeros((M[0].v.shape[0],), dtype=np.int32)
-        front_vec[front_face_mask] = 1
+        front_vec[jaw_mask] = 1
         for i in range(len(M)):
             print('layer {}: {}'.format(i, front_vec.sum() / front_vec.size))
             if i + 1 < len(M):
