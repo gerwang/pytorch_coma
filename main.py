@@ -101,7 +101,7 @@ def main(args):
     dataset_val = ComaDataset(data_dir, dtype='val', split=args.split, split_term=args.split_term,
                               pre_transform=normalize_transform)
     train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=workers_thread)
-    test_loader = DataLoader(dataset_test, batch_size=1, shuffle=False, num_workers=workers_thread)
+    test_loader = DataLoader(dataset_test, batch_size=batch_size, shuffle=False, num_workers=workers_thread)
     val_loader = DataLoader(dataset_val, batch_size=batch_size, shuffle=False, num_workers=workers_thread)
 
     print('Loading model')
@@ -207,7 +207,7 @@ def evaluate(coma, output_dir, test_loader, dataset, template_mesh, device, conf
 
         instance_l2_loss = torch.mean(l2_loss, dim=0)
         if plot_error_mean:
-            total_errors += instance_l2_loss.cpu().numpy()
+            total_errors += data.num_graphs * instance_l2_loss.cpu().numpy()
 
         mean_l2_loss = torch.mean(instance_l2_loss)
 
