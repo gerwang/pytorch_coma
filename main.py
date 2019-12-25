@@ -79,8 +79,27 @@ def main(args):
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+    front_ratios = [0.5, 0.5, 0.5, 0.5]
+
     print('Generating transforms')
-    M, A, D, U = mesh_operations.generate_transform_matrices(template_mesh, config['downsampling_factors'])
+    M, A, D, U = mesh_operations.generate_transform_matrices(template_mesh, config['downsampling_factors'],
+                                                             front_ratios)
+
+    def write_downsampled_meshes():
+        for m in M:
+            m.write_obj(os.path.join(config['visual_output_dir'], '{}.obj'.format(m.v.shape[0])))
+
+    def output_front_ratio():
+        from face_mask import front_face_mask
+        front_vec = np.zeros((M[0].v.shape[0],), dtype=np.int32)
+        front_vec[front_face_mask] = 1
+        for i in range(len(M)):
+            print('layer {}: {}'.format(i, front_vec.sum() / front_vec.size))
+            if i + 1 < len(M):
+                front_vec = D[i] @ front_vec
+
+    # output_front_ratio()
+    # write_downsampled_meshes()
 
     D_t = [scipy_to_torch_sparse(d).to(device) for d in D]
     U_t = [scipy_to_torch_sparse(u).to(device) for u in U]

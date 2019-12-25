@@ -4,11 +4,14 @@ import numpy as np
 import scipy.sparse as sp
 from psbody.mesh import Mesh
 
+
 def row(A):
     return A.reshape((1, -1))
 
+
 def col(A):
     return A.reshape((-1, 1))
+
 
 def get_vert_connectivity(mesh_v, mesh_f):
     """Returns a sparse matrix (of size #verts x #verts) where each nonzero
@@ -16,18 +19,19 @@ def get_vert_connectivity(mesh_v, mesh_f):
     nonzero element in position (15,12), that means vertex 15 is connected
     by an edge to vertex 12."""
 
-    vpv = sp.csc_matrix((len(mesh_v),len(mesh_v)))
+    vpv = sp.csc_matrix((len(mesh_v), len(mesh_v)))
 
     # for each column in the faces...
     for i in range(3):
-        IS = mesh_f[:,i]
-        JS = mesh_f[:,(i+1)%3]
+        IS = mesh_f[:, i]
+        JS = mesh_f[:, (i + 1) % 3]
         data = np.ones(len(IS))
         ij = np.vstack((row(IS.flatten()), row(JS.flatten())))
         mtx = sp.csc_matrix((data, ij), shape=vpv.shape)
         vpv = vpv + mtx + mtx.T
 
     return vpv
+
 
 def get_vertices_per_edge(mesh_v, mesh_f):
     """Returns an Ex2 array of adjacencies between vertices, where
@@ -37,7 +41,7 @@ def get_vertices_per_edge(mesh_v, mesh_f):
 
     vc = sp.coo_matrix(get_vert_connectivity(mesh_v, mesh_f))
     result = np.hstack((col(vc.row), col(vc.col)))
-    result = result[result[:,0] < result[:,1]] # for uniqueness
+    result = result[result[:, 0] < result[:, 1]]  # for uniqueness
 
     return result
 
@@ -69,6 +73,7 @@ def vertex_quadrics(mesh):
 
     return v_quadrics
 
+
 def _get_sparse_transform(faces, num_original_verts):
     verts_left = np.unique(faces.flatten())
     IS = np.arange(len(verts_left))
@@ -80,11 +85,12 @@ def _get_sparse_transform(faces, num_original_verts):
     new_faces = mp[faces.copy().flatten()].reshape((-1, 3))
 
     ij = np.vstack((IS.flatten(), JS.flatten()))
-    mtx = sp.csc_matrix((data, ij), shape=(len(verts_left) , num_original_verts ))
+    mtx = sp.csc_matrix((data, ij), shape=(len(verts_left), num_original_verts))
 
     return (new_faces, mtx)
 
-def qslim_decimator_transformer(mesh, factor=None, n_verts_desired=None):
+
+def qslim_decimator_transformer(mesh, front_vec, front_ratio, factor=None, n_verts_desired=None):
     """Return a simplified version of this mesh.
 
     A Qslim-style approach is used here.
@@ -100,6 +106,9 @@ def qslim_decimator_transformer(mesh, factor=None, n_verts_desired=None):
     if n_verts_desired is None:
         n_verts_desired = math.ceil(len(mesh.v) * factor)
 
+    n_front_face_remaining = front_vec.sum()
+    n_front_face_min = np.ceil(n_verts_desired * front_ratio)
+
     Qv = vertex_quadrics(mesh)
 
     # fill out a sparse matrix indicating vertex-vertex adjacency
@@ -109,7 +118,8 @@ def qslim_decimator_transformer(mesh, factor=None, n_verts_desired=None):
     # for f_idx in range(len(mesh.f)):
     #     vert_adj[mesh.f[f_idx], mesh.f[f_idx]] = 1
 
-    vert_adj = sp.csc_matrix((vert_adj[:, 0] * 0 + 1, (vert_adj[:, 0], vert_adj[:, 1])), shape=(len(mesh.v), len(mesh.v)))
+    vert_adj = sp.csc_matrix((vert_adj[:, 0] * 0 + 1, (vert_adj[:, 0], vert_adj[:, 1])),
+                             shape=(len(mesh.v), len(mesh.v)))
     vert_adj = vert_adj + vert_adj.T
     vert_adj = vert_adj.tocoo()
 
@@ -157,14 +167,21 @@ def qslim_decimator_transformer(mesh, factor=None, n_verts_desired=None):
             continue
         else:
 
+            if front_vec[r] == 1 and front_vec[c] == 1 and n_front_face_remaining <= n_front_face_min:
+                continue  # no! we must KEEP them both
+
             # update old vert idxs to new one,
             # in queue and in face list
-            if cost['destroy_c_cost'] < cost['destroy_r_cost']:
+            if cost['destroy_c_cost'] < cost['destroy_r_cost'] or (
+                    n_front_face_remaining <= n_front_face_min and front_vec[r] == 1):
                 to_destroy = c
                 to_keep = r
             else:
                 to_destroy = r
                 to_keep = c
+
+            if front_vec[to_destroy] == 1:
+                n_front_face_remaining -= 1
 
             collapse_list.append([to_keep, to_destroy])
 
@@ -243,14 +260,14 @@ def setup_deformation_transfer(source, target, use_normals=False):
     #        A = np.vstack((vn[nearest_f])).T
     #        coeffs_n[3 * i:3 * i + 3] = np.linalg.lstsq(A, dist_vec)[0]
 
-    #coeffs = np.hstack((coeffs_v, coeffs_n))
-    #rows = np.hstack((rows, rows))
-    #cols = np.hstack((cols, source.v.shape[0] + cols))
+    # coeffs = np.hstack((coeffs_v, coeffs_n))
+    # rows = np.hstack((rows, rows))
+    # cols = np.hstack((cols, source.v.shape[0] + cols))
     matrix = sp.csc_matrix((coeffs_v, (rows, cols)), shape=(target.v.shape[0], source.v.shape[0]))
     return matrix
 
 
-def generate_transform_matrices(mesh, factors):
+def generate_transform_matrices(mesh, factors, front_ratios):
     """Generates len(factors) meshes, each of them is scaled by factors[i] and
        computes the transformations between them.
 
@@ -266,13 +283,18 @@ def generate_transform_matrices(mesh, factors):
     A.append(get_vert_connectivity(mesh.v, mesh.f).tocoo())
     M.append(mesh)
 
-    for i,factor in enumerate(factors):
-        ds_f, ds_D = qslim_decimator_transformer(M[-1], factor=factor)
+    from face_mask import front_face_mask
+    front_vec = np.zeros((M[0].v.shape[0],), dtype=np.int32)
+    front_vec[front_face_mask] = 1
+
+    for i, factor in enumerate(factors):
+        ds_f, ds_D = qslim_decimator_transformer(M[-1], front_vec, front_ratios[i], factor=factor)
         D.append(ds_D.tocoo())
         new_mesh_v = ds_D.dot(M[-1].v)
         new_mesh = Mesh(v=new_mesh_v, f=ds_f)
         M.append(new_mesh)
         A.append(get_vert_connectivity(new_mesh.v, new_mesh.f).tocoo())
         U.append(setup_deformation_transfer(M[-1], M[-2]).tocoo())
+        front_vec = D[-1] @ front_vec
 
     return M, A, D, U
