@@ -13,6 +13,7 @@ from model import Coma
 from transform import Normalize
 from tensorboardX import SummaryWriter
 from tqdm import tqdm
+from face_mask import front_face_mask
 
 
 def scipy_to_torch_sparse(scp_matrix):
@@ -41,6 +42,9 @@ def save_model(coma, optimizer, epoch, train_loss, val_loss, checkpoint_dir):
     torch.save(checkpoint, os.path.join(checkpoint_dir, 'checkpoint_' + str(epoch) + '.pt'))
 
 
+edge_index = None
+
+
 def main(args):
     if not os.path.exists(args.conf):
         print('Config not found' + args.conf)
@@ -50,6 +54,28 @@ def main(args):
     print('Initializing parameters')
     template_file_path = config['template_fname']
     template_mesh = Mesh(filename=template_file_path)
+
+    mp = np.full((template_mesh.v.shape[0],), -1, dtype=np.int32)
+    cnt = 0
+    new_v = np.zeros((front_face_mask.shape[0], 3), dtype=np.float32)
+    for i in range(template_mesh.v.shape[0]):
+        if i in front_face_mask:
+            mp[i] = cnt
+            new_v[cnt] = template_mesh.v[i]
+            cnt += 1
+    new_f = []
+    for i in range(template_mesh.f.shape[0]):
+        tmp = mp[template_mesh.f[i]]
+        if -1 not in tmp:
+            new_f.append(tmp)
+    new_f = np.array(new_f)
+    template_mesh = Mesh(v=new_v, f=new_f)
+
+    global edge_index
+    edge_index = get_edge_index(template_mesh, config['batch_size'])
+    edge_index = torch.from_numpy(edge_index)
+
+    # template_mesh.write_obj(os.path.join(config['visual_output_dir'], '{}.obj'.format(template_mesh.v.shape[0])))
 
     if args.checkpoint_dir:
         checkpoint_dir = args.checkpoint_dir
@@ -79,8 +105,17 @@ def main(args):
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+    num_desired_vertices = [1256, 314, 79, 20]
+
     print('Generating transforms')
-    M, A, D, U = mesh_operations.generate_transform_matrices(template_mesh, config['downsampling_factors'])
+    # M, A, D, U = mesh_operations.generate_transform_matrices(template_mesh, config['downsampling_factors'])
+    M, A, D, U = mesh_operations.generate_transform_matrices(template_mesh, num_desired_vertices)
+
+    def write_downsampled_meshes():
+        for m in M:
+            m.write_obj(os.path.join(config['visual_output_dir'], '{}.obj'.format(m.v.shape[0])))
+
+    # write_downsampled_meshes()
 
     D_t = [scipy_to_torch_sparse(d).to(device) for d in D]
     U_t = [scipy_to_torch_sparse(u).to(device) for u in U]
@@ -158,10 +193,39 @@ def main(args):
         torch.cuda.synchronize()
 
 
+def get_edge_index(mesh, batch_size):
+    starts = []
+    ends = []
+    for i in range(3):
+        IS = mesh.f[:, i]
+        JS = mesh.f[:, (i + 1) % 3]
+        starts.append(IS.flatten())
+        ends.append(JS.flatten())
+    starts = np.concatenate(starts)
+    ends = np.concatenate(ends)
+    starts = np.repeat(starts, batch_size)
+    ends = np.repeat(ends, batch_size)
+    starts = np.expand_dims(starts, axis=0)
+    ends = np.expand_dims(ends, axis=0)
+    res = np.vstack([starts, ends]).astype(np.float32)
+    return res
+
+
+def magic_modify(data):
+    data.edge_index = edge_index
+    batch_size = data.num_graphs
+    x = data.x.reshape(batch_size, -1, data.num_node_features)
+    data.x = x[:, front_face_mask].reshape(-1, data.num_node_features)
+    y = data.y.reshape(batch_size, -1, data.num_node_features)
+    data.y = y[:, front_face_mask].reshape(-1, data.num_node_features)
+    return data
+
+
 def train(coma, train_loader, len_dataset, optimizer, device):
     coma.train()
     total_loss = 0
     for data in tqdm(train_loader):
+        data = magic_modify(data)
         data = data.to(device)
         optimizer.zero_grad()
         out = coma(data)
@@ -179,6 +243,7 @@ def evaluate(coma, output_dir, test_loader, dataset, template_mesh, device, visu
     if visualize:
         meshviewer = MeshViewers(shape=(1, 2))
     for i, data in tqdm(enumerate(test_loader)):
+        data = magic_modify(data)
         data = data.to(device)
         with torch.no_grad():
             out = coma(data)

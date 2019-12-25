@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 
 from layers import ChebConv_Coma, Pool
+from face_mask import front_face_mask
 
 
 class Coma(torch.nn.Module):
