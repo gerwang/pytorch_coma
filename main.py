@@ -250,6 +250,8 @@ def evaluate(coma, output_dir, test_loader, dataset, template_mesh, device, visu
         loss = F.l1_loss(out, data.y)
 
         def reshape_unnorm(x, mean, std):
+            mean = mean[front_face_mask]
+            std = std[front_face_mask]
             x = x.to(mean.device)
             x = x.view(-1, mean.size(0), mean.size(1))
             x = x * std + mean
