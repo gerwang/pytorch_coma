@@ -13,6 +13,7 @@ from model import Coma
 from transform import Normalize
 from tensorboardX import SummaryWriter
 from tqdm import tqdm
+import pathlib
 
 
 def scipy_to_torch_sparse(scp_matrix):
@@ -41,11 +42,21 @@ def save_model(coma, optimizer, epoch, train_loss, val_loss, checkpoint_dir):
     torch.save(checkpoint, os.path.join(checkpoint_dir, 'checkpoint_' + str(epoch) + '.pt'))
 
 
+def make_dir(config):
+    def mk(s):
+        pathlib.Path(config[s]).mkdir(parents=True, exist_ok=False)
+
+    mk('checkpoint_dir')
+    mk('visual_output_dir')
+    mk('summary_dir')
+
+
 def main(args):
     if not os.path.exists(args.conf):
         print('Config not found' + args.conf)
 
     config = read_config(args.conf)
+    make_dir(config)
 
     print('Initializing parameters')
     template_file_path = config['template_fname']
@@ -79,11 +90,9 @@ def main(args):
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    front_ratios = [0.5, 0.5, 0.5, 0.5]
-
     print('Generating transforms')
     M, A, D, U = mesh_operations.generate_transform_matrices(template_mesh, config['downsampling_factors'],
-                                                             front_ratios)
+                                                             config['front_ratios'])
 
     def write_downsampled_meshes():
         for m in M:
@@ -98,8 +107,8 @@ def main(args):
             if i + 1 < len(M):
                 front_vec = D[i] @ front_vec
 
-    # output_front_ratio()
-    # write_downsampled_meshes()
+    output_front_ratio()
+    write_downsampled_meshes()
 
     D_t = [scipy_to_torch_sparse(d).to(device) for d in D]
     U_t = [scipy_to_torch_sparse(u).to(device) for u in U]

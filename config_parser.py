@@ -58,6 +58,7 @@ def read_config(fname):
     config_parms['optimizer'] = config.get('Model Parameters', 'optimizer')
     config_parms['lambda_link'] = config.getfloat('Model Parameters', 'lambda_link')
     config_parms['lambda_ent'] = config.getfloat('Model Parameters', 'lambda_ent')
+    config_parms['front_ratios'] = [float(x) for x in config.get('Model Parameters', 'front_ratios').split(',')]
 
     config_parms['batch_size'] = config.getint('Learning Parameters', 'batch_size')
     config_parms['learning_rate'] = config.getfloat('Learning Parameters', 'learning_rate')
