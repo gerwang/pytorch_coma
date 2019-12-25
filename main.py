@@ -129,7 +129,9 @@ def main(args):
     coma.to(device)
 
     if eval_flag:
-        val_loss, val_l2_loss = evaluate(coma, output_dir, test_loader, dataset_test, template_mesh, device, visualize)
+        val_loss, val_l2_loss = evaluate(coma, output_dir, test_loader, dataset_test, template_mesh, device, config,
+                                         visualize,
+                                         plot_error_mean=True)
         print('val loss: l1 {}, unnorm l2 {}'.format(val_loss, val_l2_loss))
         return
 
@@ -140,7 +142,7 @@ def main(args):
     for epoch in range(start_epoch, total_epochs + 1):
         print("Training for epoch ", epoch)
         train_loss = train(coma, train_loader, len(dataset), optimizer, device)
-        val_loss, val_l2_loss = evaluate(coma, output_dir, val_loader, dataset_val, template_mesh, device,
+        val_loss, val_l2_loss = evaluate(coma, output_dir, val_loader, dataset_val, template_mesh, device, config,
                                          visualize=visualize)
 
         print('epoch ', epoch, ' Train loss ', train_loss, ' Val loss ', val_loss, 'Val l2 loss', val_l2_loss)
@@ -172,12 +174,15 @@ def train(coma, train_loader, len_dataset, optimizer, device):
     return total_loss / len_dataset
 
 
-def evaluate(coma, output_dir, test_loader, dataset, template_mesh, device, visualize=False):
+def evaluate(coma, output_dir, test_loader, dataset, template_mesh, device, config, visualize=False,
+             plot_error_mean=False):
     coma.eval()
     total_loss = 0
     total_unnormalized_l2_loss = 0
     if visualize:
         meshviewer = MeshViewers(shape=(1, 2))
+    if plot_error_mean:
+        total_errors = np.zeros((template_mesh.v.shape[0],), np.float32)
     for i, data in tqdm(enumerate(test_loader)):
         data = data.to(device)
         with torch.no_grad():
@@ -190,10 +195,24 @@ def evaluate(coma, output_dir, test_loader, dataset, template_mesh, device, visu
             x = x * std + mean
             return x
 
-        l2_loss = F.mse_loss(reshape_unnorm(out, dataset.mean, dataset.std),
-                             reshape_unnorm(data.y, dataset.mean, dataset.std))
+        def get_point_position(x):
+            x = reshape_unnorm(x, dataset.mean, dataset.std)
+            x = x.reshape(data.num_graphs, -1, dataset.num_node_features)
+            return x
+
+        def rse(a, b):
+            return torch.sqrt(torch.sum((a - b) ** 2, axis=2))
+
+        l2_loss = rse(get_point_position(out), get_point_position(data.y))
+
+        instance_l2_loss = torch.mean(l2_loss, dim=0)
+        if plot_error_mean:
+            total_errors += instance_l2_loss.cpu().numpy()
+
+        mean_l2_loss = torch.mean(instance_l2_loss)
+
         total_loss += data.num_graphs * loss.item()
-        total_unnormalized_l2_loss += data.num_graphs * l2_loss.item()
+        total_unnormalized_l2_loss += data.num_graphs * mean_l2_loss.item()
 
         if visualize and i % 100 == 0:
             save_out = out.detach().cpu().numpy()
@@ -204,6 +223,10 @@ def evaluate(coma, output_dir, test_loader, dataset, template_mesh, device, visu
             meshviewer[0][0].set_dynamic_meshes([result_mesh])
             meshviewer[0][1].set_dynamic_meshes([expected_mesh])
             meshviewer[0][0].save_snapshot(os.path.join(output_dir, 'file' + str(i) + '.png'), blocking=False)
+
+    if plot_error_mean:
+        total_errors /= len(dataset)
+        np.save(os.path.join(config['visual_output_dir'], 'total_errors.npy'), total_errors)
 
     return total_loss / len(dataset), total_unnormalized_l2_loss / len(dataset)
 
