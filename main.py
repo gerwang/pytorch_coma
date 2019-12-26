@@ -183,6 +183,8 @@ def evaluate(coma, output_dir, test_loader, dataset, template_mesh, device, conf
         meshviewer = MeshViewers(shape=(1, 2))
     if plot_error_mean:
         total_errors = np.zeros((template_mesh.v.shape[0],), np.float32)
+
+    test_outputs = []
     for i, data in tqdm(enumerate(test_loader)):
         data = data.to(device)
         with torch.no_grad():
@@ -214,6 +216,8 @@ def evaluate(coma, output_dir, test_loader, dataset, template_mesh, device, conf
         total_loss += data.num_graphs * loss.item()
         total_unnormalized_l2_loss += data.num_graphs * mean_l2_loss.item()
 
+        test_outputs.append(out.view(-1, dataset.mean.size(0), dataset.mean.size(1)).cpu().numpy())
+
         if visualize and i % 100 == 0:
             save_out = out.detach().cpu().numpy()
             save_out = save_out * dataset.std.numpy() + dataset.mean.numpy()
@@ -223,6 +227,9 @@ def evaluate(coma, output_dir, test_loader, dataset, template_mesh, device, conf
             meshviewer[0][0].set_dynamic_meshes([result_mesh])
             meshviewer[0][1].set_dynamic_meshes([expected_mesh])
             meshviewer[0][0].save_snapshot(os.path.join(output_dir, 'file' + str(i) + '.png'), blocking=False)
+
+    test_outputs = np.concatenate(test_outputs, axis=0)
+    np.save(os.path.join(output_dir, 'test_outputs.npy'), test_outputs)
 
     if plot_error_mean:
         total_errors /= len(dataset)
