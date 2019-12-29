@@ -56,7 +56,6 @@ def main(args):
         print('Config not found' + args.conf)
 
     config = read_config(args.conf)
-    make_dir(config)
 
     print('Initializing parameters')
     template_file_path = config['template_fname']
@@ -87,6 +86,9 @@ def main(args):
     opt = config['optimizer']
     batch_size = config['batch_size']
     val_losses, accs, durations = [], [], []
+
+    if not eval_flag and not config['checkpoint_file']:
+        make_dir(config)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
