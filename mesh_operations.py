@@ -3,12 +3,17 @@ import heapq
 import numpy as np
 import scipy.sparse as sp
 from psbody.mesh import Mesh
+import numba
+from tqdm import tqdm
+
 
 def row(A):
     return A.reshape((1, -1))
 
+
 def col(A):
     return A.reshape((-1, 1))
+
 
 def get_vert_connectivity(mesh_v, mesh_f):
     """Returns a sparse matrix (of size #verts x #verts) where each nonzero
@@ -16,18 +21,19 @@ def get_vert_connectivity(mesh_v, mesh_f):
     nonzero element in position (15,12), that means vertex 15 is connected
     by an edge to vertex 12."""
 
-    vpv = sp.csc_matrix((len(mesh_v),len(mesh_v)))
+    vpv = sp.csc_matrix((len(mesh_v), len(mesh_v)))
 
     # for each column in the faces...
     for i in range(3):
-        IS = mesh_f[:,i]
-        JS = mesh_f[:,(i+1)%3]
+        IS = mesh_f[:, i]
+        JS = mesh_f[:, (i + 1) % 3]
         data = np.ones(len(IS))
         ij = np.vstack((row(IS.flatten()), row(JS.flatten())))
         mtx = sp.csc_matrix((data, ij), shape=vpv.shape)
         vpv = vpv + mtx + mtx.T
 
     return vpv
+
 
 def get_vertices_per_edge(mesh_v, mesh_f):
     """Returns an Ex2 array of adjacencies between vertices, where
@@ -37,12 +43,37 @@ def get_vertices_per_edge(mesh_v, mesh_f):
 
     vc = sp.coo_matrix(get_vert_connectivity(mesh_v, mesh_f))
     result = np.hstack((col(vc.row), col(vc.col)))
-    result = result[result[:,0] < result[:,1]] # for uniqueness
+    result = result[result[:, 0] < result[:, 1]]  # for uniqueness
 
     return result
 
 
-def vertex_quadrics(mesh):
+# @numba.njit(parallel=True)
+def numba_quadrics_kernel(v_quadrics, mesh_f, all_positions):
+    for f_idx in tqdm(range(len(mesh_f))):
+        numba_one_face_kernel(all_positions, f_idx, mesh_f, v_quadrics)
+
+
+# @numba.njit(parallel=True)
+def numba_one_face_kernel(all_positions, f_idx, mesh_f, v_quadrics):
+    # Compute normalized plane equation for that face
+    vert_idxs = mesh_f[f_idx]
+    for i in range(1):  # fixme
+        # for i in range(all_positions.shape[0]):
+        # instance = mesh_v
+        instance = all_positions[i]
+        verts = np.hstack((instance[vert_idxs], np.array([1, 1, 1]).reshape(-1, 1)))
+        u, s, v = np.linalg.svd(verts)
+        eq = np.ascontiguousarray(v[-1, :]).reshape(-1, 1)
+        eq = eq / (np.linalg.norm(eq[0:3]))
+
+        # Add the outer product of the plane equation to the
+        # quadrics of the vertices for this face
+        for k in range(3):
+            v_quadrics[mesh_f[f_idx, k], :, :] += np.outer(eq, eq)
+
+
+def vertex_quadrics(mesh, all_positions):
     """Computes a quadric for each vertex in the Mesh.
 
     Returns:
@@ -50,24 +81,17 @@ def vertex_quadrics(mesh):
     """
 
     # Allocate quadrics
-    v_quadrics = np.zeros((len(mesh.v), 4, 4,))
+    mesh_v = mesh.v
+    v_quadrics = np.zeros((len(mesh_v), 4, 4,))
 
     # For each face...
-    for f_idx in range(len(mesh.f)):
-
-        # Compute normalized plane equation for that face
-        vert_idxs = mesh.f[f_idx]
-        verts = np.hstack((mesh.v[vert_idxs], np.array([1, 1, 1]).reshape(-1, 1)))
-        u, s, v = np.linalg.svd(verts)
-        eq = v[-1, :].reshape(-1, 1)
-        eq = eq / (np.linalg.norm(eq[0:3]))
-
-        # Add the outer product of the plane equation to the
-        # quadrics of the vertices for this face
-        for k in range(3):
-            v_quadrics[mesh.f[f_idx, k], :, :] += np.outer(eq, eq)
+    mesh_f = mesh.f
+    print('starting quadrics {}'.format(mesh_v.shape[0]))
+    numba_quadrics_kernel(v_quadrics, mesh_f, all_positions)
+    print('done quadrics {}'.format(mesh_v.shape[0]))
 
     return v_quadrics
+
 
 def _get_sparse_transform(faces, num_original_verts):
     verts_left = np.unique(faces.flatten())
@@ -80,11 +104,12 @@ def _get_sparse_transform(faces, num_original_verts):
     new_faces = mp[faces.copy().flatten()].reshape((-1, 3))
 
     ij = np.vstack((IS.flatten(), JS.flatten()))
-    mtx = sp.csc_matrix((data, ij), shape=(len(verts_left) , num_original_verts ))
+    mtx = sp.csc_matrix((data, ij), shape=(len(verts_left), num_original_verts))
 
     return (new_faces, mtx)
 
-def qslim_decimator_transformer(mesh, factor=None, n_verts_desired=None):
+
+def qslim_decimator_transformer(mesh, all_positions, factor=None, n_verts_desired=None):
     """Return a simplified version of this mesh.
 
     A Qslim-style approach is used here.
@@ -100,7 +125,7 @@ def qslim_decimator_transformer(mesh, factor=None, n_verts_desired=None):
     if n_verts_desired is None:
         n_verts_desired = math.ceil(len(mesh.v) * factor)
 
-    Qv = vertex_quadrics(mesh)
+    Qv = vertex_quadrics(mesh, all_positions)
 
     # fill out a sparse matrix indicating vertex-vertex adjacency
     # from psbody.mesh.topology.connectivity import get_vertices_per_edge
@@ -109,13 +134,14 @@ def qslim_decimator_transformer(mesh, factor=None, n_verts_desired=None):
     # for f_idx in range(len(mesh.f)):
     #     vert_adj[mesh.f[f_idx], mesh.f[f_idx]] = 1
 
-    vert_adj = sp.csc_matrix((vert_adj[:, 0] * 0 + 1, (vert_adj[:, 0], vert_adj[:, 1])), shape=(len(mesh.v), len(mesh.v)))
+    vert_adj = sp.csc_matrix((vert_adj[:, 0] * 0 + 1, (vert_adj[:, 0], vert_adj[:, 1])),
+                             shape=(len(mesh.v), len(mesh.v)))
     vert_adj = vert_adj + vert_adj.T
     vert_adj = vert_adj.tocoo()
 
     def collapse_cost(Qv, r, c, v):
         Qsum = Qv[r, :, :] + Qv[c, :, :]
-        p1 = np.vstack((v[r].reshape(-1, 1), np.array([1]).reshape(-1, 1)))
+        p1 = np.vstack((v[r].reshape(-1, 1), np.array([1]).reshape(-1, 1))) # TODO bug here
         p2 = np.vstack((v[c].reshape(-1, 1), np.array([1]).reshape(-1, 1)))
 
         destroy_c_cost = p1.T.dot(Qsum).dot(p1)
@@ -243,14 +269,14 @@ def setup_deformation_transfer(source, target, use_normals=False):
     #        A = np.vstack((vn[nearest_f])).T
     #        coeffs_n[3 * i:3 * i + 3] = np.linalg.lstsq(A, dist_vec)[0]
 
-    #coeffs = np.hstack((coeffs_v, coeffs_n))
-    #rows = np.hstack((rows, rows))
-    #cols = np.hstack((cols, source.v.shape[0] + cols))
+    # coeffs = np.hstack((coeffs_v, coeffs_n))
+    # rows = np.hstack((rows, rows))
+    # cols = np.hstack((cols, source.v.shape[0] + cols))
     matrix = sp.csc_matrix((coeffs_v, (rows, cols)), shape=(target.v.shape[0], source.v.shape[0]))
     return matrix
 
 
-def generate_transform_matrices(mesh, factors):
+def generate_transform_matrices(mesh, all_positions, factors):
     """Generates len(factors) meshes, each of them is scaled by factors[i] and
        computes the transformations between them.
 
@@ -260,19 +286,35 @@ def generate_transform_matrices(mesh, factors):
        D: Downsampling transforms between each of the meshes
        U: Upsampling transforms between each of the meshes
     """
-
+    backup = mesh.v
+    # mesh.v = all_positions[0]
+    mesh.v = np.zeros_like(mesh.v)  # fixme
     factors = map(lambda x: 1.0 / x, factors)
     M, A, D, U = [], [], [], []
     A.append(get_vert_connectivity(mesh.v, mesh.f).tocoo())
     M.append(mesh)
 
-    for i,factor in enumerate(factors):
-        ds_f, ds_D = qslim_decimator_transformer(M[-1], factor=factor)
+    backups = []
+    backups.append(backup)
+
+    for i, factor in enumerate(factors):
+        ds_f, ds_D = qslim_decimator_transformer(M[-1], all_positions, factor=factor)
         D.append(ds_D.tocoo())
+        all_positions = all_positions.transpose([1, 0, 2])
+        all_positions = all_positions.reshape(all_positions.shape[0], -1)
         new_mesh_v = ds_D.dot(M[-1].v)
+
+        backup = ds_D.dot(backup)
+        backups.append(backup)
+
+        all_positions = ds_D.dot(all_positions)
+        all_positions = all_positions.reshape(all_positions.shape[0], -1, 3).transpose([1, 0, 2])
         new_mesh = Mesh(v=new_mesh_v, f=ds_f)
         M.append(new_mesh)
         A.append(get_vert_connectivity(new_mesh.v, new_mesh.f).tocoo())
         U.append(setup_deformation_transfer(M[-1], M[-2]).tocoo())
+
+    for i in range(len(backups)):
+        M[i].v = backups[i]
 
     return M, A, D, U

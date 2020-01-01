@@ -79,8 +79,27 @@ def main(args):
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+    train_path = config['train_path']
+    test_path = config['test_path']
+    all_data = np.concatenate([np.load(train_path), np.load(test_path)], axis=0)
+
     print('Generating transforms')
-    M, A, D, U = mesh_operations.generate_transform_matrices(template_mesh, config['downsampling_factors'])
+    M, A, D, U = mesh_operations.generate_transform_matrices(template_mesh, all_data, config['downsampling_factors'])
+
+    np.savez(os.path.join(config['visual_output_dir'], 'coma_downsample'), {
+        'M': M,
+        'A': A,
+        'D': D,
+        'U': U
+    })
+
+    del all_data
+
+    def write_downsampled_meshes():
+        for m in M:
+            m.write_obj(os.path.join(config['visual_output_dir'], '{}.obj'.format(m.v.shape[0])))
+
+    write_downsampled_meshes()
 
     D_t = [scipy_to_torch_sparse(d).to(device) for d in D]
     U_t = [scipy_to_torch_sparse(u).to(device) for u in U]
