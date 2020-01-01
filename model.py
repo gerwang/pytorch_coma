@@ -32,10 +32,15 @@ class Coma(torch.nn.Module):
         x, edge_index = data.x, data.edge_index
         batch_size = data.num_graphs
         x = x.reshape(batch_size, -1, self.enc_filters[0])
-        x = self.encoder(x)
-        x = self.decoder(x)
-        x = x.reshape(-1, self.dec_filters[-1])
-        return x
+        z_1 = self.encoder(x)
+        x = self.decoder(z_1)
+        if self.training:
+            z_2 = self.encoder(x)
+            x = x.reshape(-1, self.dec_filters[-1])
+            return x, z_1, z_2
+        else:
+            x = x.reshape(-1, self.dec_filters[-1])
+            return x
 
     def encoder(self, x):
         for i in range(self.n_layers):

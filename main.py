@@ -166,8 +166,10 @@ def train(coma, train_loader, len_dataset, optimizer, device):
     for data in tqdm(train_loader):
         data = data.to(device)
         optimizer.zero_grad()
-        out = coma(data)
-        loss = F.l1_loss(out, data.y)
+        out, z_1, z_2 = coma(data)
+        data_loss = F.l1_loss(out, data.y)
+        latent_loss = F.l1_loss(z_1, z_2)
+        loss = data_loss + latent_loss
         total_loss += data.num_graphs * loss.item()
         loss.backward()
         optimizer.step()
