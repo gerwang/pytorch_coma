@@ -205,7 +205,7 @@ def evaluate(coma, output_dir, test_loader, dataset, template_mesh, device, conf
             return x
 
         def rse(a, b):
-            return torch.sqrt(torch.sum((a - b) ** 2, axis=2))
+            return torch.sqrt(torch.sum((a - b) ** 2, dim=2))
 
         l2_loss = rse(get_point_position(out), get_point_position(data.y))
 
