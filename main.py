@@ -141,11 +141,12 @@ def main(args):
     writer = SummaryWriter(config['summary_dir'])
     for epoch in range(start_epoch, total_epochs + 1):
         print("Training for epoch ", epoch)
-        train_loss = train(coma, train_loader, len(dataset), optimizer, device)
+        train_loss, latent_loss = train(coma, train_loader, len(dataset), optimizer, device)
         val_loss, val_l2_loss = evaluate(coma, output_dir, val_loader, dataset_val, template_mesh, device, config,
                                          visualize=visualize)
 
-        print('epoch ', epoch, ' Train loss ', train_loss, ' Val loss ', val_loss, 'Val l2 loss', val_l2_loss)
+        print('epoch ', epoch, ' Train loss ', train_loss, 'Latent Loss', latent_loss, ' Val loss ', val_loss,
+              'Val l2 loss', val_l2_loss)
         if val_loss < best_val_loss:
             save_model(coma, optimizer, epoch, train_loss, val_loss, checkpoint_dir)
             best_val_loss = val_loss
@@ -163,17 +164,19 @@ def main(args):
 def train(coma, train_loader, len_dataset, optimizer, device):
     coma.train()
     total_loss = 0
+    total_latent_loss = 0
     for data in tqdm(train_loader):
         data = data.to(device)
         optimizer.zero_grad()
         out, z_1, z_2 = coma(data)
         data_loss = F.l1_loss(out, data.y)
         latent_loss = F.l1_loss(z_1, z_2)
-        loss = data_loss + latent_loss
-        total_loss += data.num_graphs * loss.item()
+        loss = data_loss + 0.01 * latent_loss
+        total_loss += data.num_graphs * data_loss.item()
+        total_latent_loss += data.num_graphs * latent_loss.item()
         loss.backward()
         optimizer.step()
-    return total_loss / len_dataset
+    return total_loss / len_dataset, total_latent_loss / len_dataset
 
 
 def evaluate(coma, output_dir, test_loader, dataset, template_mesh, device, config, visualize=False,
