@@ -11,6 +11,8 @@ from config_parser import read_config
 from data import ComaDataset
 from model import Coma
 from transform import Normalize
+from tensorboardX import SummaryWriter
+from tqdm import tqdm
 
 
 def scipy_to_torch_sparse(scp_matrix):
@@ -23,10 +25,11 @@ def scipy_to_torch_sparse(scp_matrix):
     sparse_tensor = torch.sparse.FloatTensor(i, v, torch.Size(shape))
     return sparse_tensor
 
-def adjust_learning_rate(optimizer, lr_decay):
 
+def adjust_learning_rate(optimizer, lr_decay):
     for param_group in optimizer.param_groups:
         param_group['lr'] = param_group['lr'] * lr_decay
+
 
 def save_model(coma, optimizer, epoch, train_loss, val_loss, checkpoint_dir):
     checkpoint = {}
@@ -35,10 +38,12 @@ def save_model(coma, optimizer, epoch, train_loss, val_loss, checkpoint_dir):
     checkpoint['epoch_num'] = epoch
     checkpoint['train_loss'] = train_loss
     checkpoint['val_loss'] = val_loss
-    torch.save(checkpoint, os.path.join(checkpoint_dir, 'checkpoint_'+ str(epoch)+'.pt'))
+    torch.save(checkpoint, os.path.join(checkpoint_dir, 'checkpoint_' + str(epoch) + '.pt'))
 
 
 def main(args):
+    # torch.autograd.set_detect_anomaly(True) # this will slow down the program
+    torch.manual_seed(2)
     if not os.path.exists(args.conf):
         print('Config not found' + args.conf)
 
@@ -78,7 +83,6 @@ def main(args):
 
     print('Generating transforms')
     M, A, D, U = mesh_operations.generate_transform_matrices(template_mesh, config['downsampling_factors'])
-
     D_t = [scipy_to_torch_sparse(d).to(device) for d in D]
     U_t = [scipy_to_torch_sparse(u).to(device) for u in U]
     A_t = [scipy_to_torch_sparse(a).to(device) for a in A]
@@ -91,10 +95,15 @@ def main(args):
         data_dir = config['data_dir']
 
     normalize_transform = Normalize()
-    dataset = ComaDataset(data_dir, dtype='train', split=args.split, split_term=args.split_term, pre_transform=normalize_transform)
-    dataset_test = ComaDataset(data_dir, dtype='test', split=args.split, split_term=args.split_term, pre_transform=normalize_transform)
+    dataset = ComaDataset(data_dir, dtype='train', split=args.split, split_term=args.split_term,
+                          pre_transform=normalize_transform)
+    dataset_test = ComaDataset(data_dir, dtype='test', split=args.split, split_term=args.split_term,
+                               pre_transform=normalize_transform)
+    dataset_val = ComaDataset(data_dir, dtype='val', split=args.split, split_term=args.split_term,
+                              pre_transform=normalize_transform)
     train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=workers_thread)
     test_loader = DataLoader(dataset_test, batch_size=1, shuffle=False, num_workers=workers_thread)
+    val_loader = DataLoader(dataset_val, batch_size=batch_size, shuffle=False, num_workers=workers_thread)
 
     print('Loading model')
     start_epoch = 1
@@ -113,7 +122,7 @@ def main(args):
         start_epoch = checkpoint['epoch_num']
         coma.load_state_dict(checkpoint['state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer'])
-        #To find if this is fixed in pytorch
+        # To find if this is fixed in pytorch
         for state in optimizer.state.values():
             for k, v in state.items():
                 if isinstance(v, torch.Tensor):
@@ -121,19 +130,28 @@ def main(args):
     coma.to(device)
 
     if eval_flag:
-        val_loss = evaluate(coma, output_dir, test_loader, dataset_test, template_mesh, device, visualize)
-        print('val loss', val_loss)
+        if not os.path.exists('./mesh_output'):
+            os.makedirs('./mesh_output')
+        val_loss, val_l2_loss, x_list_list, edge_index_list_list, perm_list_list = evaluate(coma, output_dir, test_loader, dataset_test, template_mesh, device, visualize)
+        print('val loss: l1 {}, unnorm l2 {}'.format(val_loss, val_l2_loss))
+        # save mediate result
+        for i in range(len(x_list_list)):
+            for j in range(len(x_list_list[i])):
+                np.savez('./mesh_output/{}_{}'.format(i,j), x=x_list_list[i][j], edge_index=edge_index_list_list[i][j], perm=perm_list_list[i][j])
         return
 
     best_val_loss = float('inf')
     val_loss_history = []
 
+    # writer = SummaryWriter(config['summary_dir'])
+    writer = SummaryWriter('./summary')
     for epoch in range(start_epoch, total_epochs + 1):
         print("Training for epoch ", epoch)
-        train_loss = train(coma, train_loader, len(dataset), optimizer, device)
-        val_loss = evaluate(coma, output_dir, test_loader, dataset_test, template_mesh, device, visualize=visualize)
+        train_loss = train(coma, train_loader, len(dataset), optimizer, device, config, writer, epoch)
+        val_loss, val_l2_loss, _, _, _ = evaluate(coma, output_dir, val_loader, dataset_val, template_mesh, device,
+                                         visualize=visualize)
 
-        print('epoch ', epoch,' Train loss ', train_loss, ' Val loss ', val_loss)
+        print('epoch ', epoch, ' Train loss ', train_loss, ' Val loss ', val_loss, 'Val l2 loss', val_l2_loss)
         if val_loss < best_val_loss:
             save_model(coma, optimizer, epoch, train_loss, val_loss, checkpoint_dir)
             best_val_loss = val_loss
@@ -141,49 +159,76 @@ def main(args):
         val_loss_history.append(val_loss)
         val_losses.append(best_val_loss)
 
-        if opt=='sgd':
+        if opt == 'sgd':
             adjust_learning_rate(optimizer, lr_decay)
 
     if torch.cuda.is_available():
         torch.cuda.synchronize()
 
 
-def train(coma, train_loader, len_dataset, optimizer, device):
+def train(coma, train_loader, len_dataset, optimizer, device, config, writer, cur_epoch):
     coma.train()
     total_loss = 0
-    for data in train_loader:
+    total_link_loss = 0
+    total_ent_loss = 0
+    for data in tqdm(train_loader):
         data = data.to(device)
         optimizer.zero_grad()
-        out = coma(data)
+        out, _, _, _ = coma(data)
         loss = F.l1_loss(out, data.y)
         total_loss += data.num_graphs * loss.item()
         loss.backward()
         optimizer.step()
+
+    writer.add_scalar('data_loss', total_loss / len_dataset, cur_epoch)
+    writer.flush()
+
     return total_loss / len_dataset
 
 
-def evaluate(coma, output_dir, test_loader, dataset, template_mesh, device, visualize=False):
+def evaluate(coma, output_dir, test_loader, dataset, template_mesh, device, visualize=False, save_mesh=False):
     coma.eval()
     total_loss = 0
-    meshviewer = MeshViewers(shape=(1, 2))
-    for i, data in enumerate(test_loader):
+    total_unnormalized_l2_loss = 0
+    x_list_list = []
+    edge_index_list_list = []
+    perm_list_list = []
+
+    if visualize:
+        meshviewer = MeshViewers(shape=(1, 2))
+    for i, data in tqdm(enumerate(test_loader)):
         data = data.to(device)
         with torch.no_grad():
-            out = coma(data)
+            out, x_list, edge_index_list, perm_list = coma(data)
         loss = F.l1_loss(out, data.y)
+
+        def reshape_unnorm(x, mean, std):
+            x = x.to(mean.device)
+            x = x.view(-1, mean.size(0), mean.size(1))
+            x = x * std + mean
+            return x
+
+        l2_loss = F.mse_loss(reshape_unnorm(out, dataset.mean, dataset.std),
+                             reshape_unnorm(data.y, dataset.mean, dataset.std))
         total_loss += data.num_graphs * loss.item()
+        total_unnormalized_l2_loss += data.num_graphs * l2_loss.item()
 
         if visualize and i % 100 == 0:
             save_out = out.detach().cpu().numpy()
-            save_out = save_out*dataset.std.numpy()+dataset.mean.numpy()
-            expected_out = (data.y.detach().cpu().numpy())*dataset.std.numpy()+dataset.mean.numpy()
+            save_out = save_out * dataset.std.numpy() + dataset.mean.numpy()
+            expected_out = (data.y.detach().cpu().numpy()) * dataset.std.numpy() + dataset.mean.numpy()
             result_mesh = Mesh(v=save_out, f=template_mesh.f)
             expected_mesh = Mesh(v=expected_out, f=template_mesh.f)
             meshviewer[0][0].set_dynamic_meshes([result_mesh])
             meshviewer[0][1].set_dynamic_meshes([expected_mesh])
-            meshviewer[0][0].save_snapshot(os.path.join(output_dir, 'file'+str(i)+'.png'), blocking=False)
+            meshviewer[0][0].save_snapshot(os.path.join(output_dir, 'file' + str(i) + '.png'), blocking=False)
 
-    return total_loss/len(dataset)
+        if i < 5:
+            x_list_list.append(x_list)
+            edge_index_list_list.append(edge_index_list)
+            perm_list_list.append(perm_list)
+
+    return total_loss / len(dataset), total_unnormalized_l2_loss / len(dataset), x_list_list, edge_index_list_list, perm_list_list
 
 
 if __name__ == '__main__':
@@ -192,14 +237,14 @@ if __name__ == '__main__':
     parser.add_argument('-c', '--conf', help='path of config file')
     parser.add_argument('-s', '--split', default='sliced', help='split can be sliced, expression or identity ')
     parser.add_argument('-st', '--split_term', default='sliced', help='split term can be sliced, expression name '
-                                                               'or identity name')
+                                                                      'or identity name')
     parser.add_argument('-d', '--data_dir', help='path where the downloaded data is stored')
     parser.add_argument('-cp', '--checkpoint_dir', help='path where checkpoints file need to be stored')
 
     args = parser.parse_args()
 
     if args.conf is None:
-        args.conf = os.path.join(os.path.dirname(__file__), 'default.cfg')
+        args.conf = os.path.join(os.path.dirname(__file__), 'topk.cfg')
         print('configuration file not specified, trying to load '
               'it from current directory', args.conf)
 
